@@ -11,6 +11,9 @@ requests = "^2.32.3"
 sqlparse = "^0.5.3"
 
 
+[tool.poetry.group.dev.dependencies]
+icecream = "^2.1.4"
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
