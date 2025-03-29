@@ -780,7 +780,14 @@ def main():
         default=QuestDBClient.DEFAULT_TIMEOUT,
         help=f"Request timeout in seconds (default: {QuestDBClient.DEFAULT_TIMEOUT}).",
     )
-    parser.add_argument(
+    log_level_group = parser.add_mutually_exclusive_group()
+    log_level_group.add_argument(
+        "-W",
+        "--warning",
+        action="store_true",
+        help="Use warning level logging",
+    )
+    log_level_group.add_argument(
         "-D",
         "--debug",
         action="store_true",
@@ -1094,7 +1101,11 @@ def main():
         sys.exit(2)
 
     # Set logging level
-    if args.debug:
+    if args.warning:
+        logging.getLogger().setLevel(logging.WARNING)  # Set root logger level
+        logger.setLevel(logging.WARNING)
+        logger.debug("Debug logging enabled.")
+    elif args.debug:
         logging.getLogger().setLevel(logging.DEBUG)  # Set root logger level
         logger.setLevel(logging.DEBUG)
         logger.debug("Debug logging enabled.")
