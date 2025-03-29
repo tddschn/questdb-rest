@@ -430,7 +430,12 @@ def handle_exec(args, client: QuestDBClient):
                 )
                 sys.exit(1)
             # append cwd to sys.path to allow local module imports
+            logger.info(
+                f"Adding current working directory {Path.cwd()} to sys.path for module import."
+            )
             sys.path.append(str(Path.cwd()))
+            logger.debug(f"sys.path: {sys.path}")  # Log the sys.path for debugging
+            logger.info(f"Importing module: {module_spec}")
             mod = importlib.import_module(module_spec)
             query_str = getattr(mod, var_name, None)
             if not isinstance(query_str, str):
