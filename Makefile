@@ -1,6 +1,7 @@
 patch-p: patch install publish push
 minor-p: minor install publish push
 major-p: major install publish push
+p: install publish push
 
 install:
 	poetry install
