@@ -330,14 +330,15 @@ def handle_imp(args, client: QuestDBClient):
                     else:  # Tabular format
                         response_text = response.text
                         # Basic check for tabular failure (less reliable) - might need improvement
-                        if (
-                            "error" in response_text.lower()
-                            or response.status_code >= 400
-                        ):
-                            import_failed_this_file = True
-                            logger.warning(
-                                f"Import of '{file_path}' may have failed (status code: {response.status_code})."
-                            )
+                        # error is always in the response text for tabular
+                        # if (
+                        #     "error" in response_text.lower()
+                        #     or response.status_code >= 400
+                        # ):
+                        #     import_failed_this_file = True
+                        #     logger.warning(
+                        #         f"Import of '{file_path}' may have failed (status code: {response.status_code})."
+                        #     )
 
                 except json.JSONDecodeError:
                     import_failed_this_file = True
