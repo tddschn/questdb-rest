@@ -1,9 +1,21 @@
 [tool.poetry]
 name = "questdb-rest"
 version = "0.1.0"
-description = ""
+description = "questdb REST API Python client library and CLI"
 authors = ["Teddy Xinyuan Chen <45612704+tddschn@users.noreply.github.com>"]
 readme = "README.md"
+license = "MIT"
+homepage = "https://github.com/tddschn/questdb-rest"
+repository = "https://github.com/tddschn/questdb-rest"
+classifiers = ["Topic :: Utilities"]
+keywords = ["questdb", "rest", "api", "wrapper", "client", "http"]
+
+[tool.poetry.scripts]
+qdb-cli = "questdb_rest.cli:main"
+questdb-cli = "questdb_rest.cli:main"
+
+[tool.poetry.urls]
+"Bug Tracker" = "https://github.com/tddschn/questdb-rest/issues"
 
 [tool.poetry.dependencies]
 python = ">=3.11"
