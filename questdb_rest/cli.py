@@ -429,6 +429,8 @@ def handle_exec(args, client: QuestDBClient):
                     "Invalid format for --get-query-from-python-module. Expected module_path:variable_name."
                 )
                 sys.exit(1)
+            # append cwd to sys.path to allow local module imports
+            sys.path.append(str(Path.cwd()))
             mod = importlib.import_module(module_spec)
             query_str = getattr(mod, var_name, None)
             if not isinstance(query_str, str):
