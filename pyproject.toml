@@ -9,6 +9,7 @@ homepage = "https://github.com/tddschn/questdb-rest"
 repository = "https://github.com/tddschn/questdb-rest"
 classifiers = ["Topic :: Utilities"]
 keywords = ["questdb", "rest", "api", "wrapper", "client", "http"]
+packages = [{ include = "questdb_rest" }]
 
 [tool.poetry.scripts]
 qdb-cli = "questdb_rest.cli:main"
