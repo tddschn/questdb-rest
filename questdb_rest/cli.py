@@ -413,11 +413,36 @@ def handle_imp(args, client: QuestDBClient):
 
 def handle_exec(args, client: QuestDBClient):
     """Handles the /exec command using the client."""
+    import importlib  # added for module query import
+
     sql_content = ""
     source_description = ""
 
-    # 1. Get SQL Content (same as before)
-    if args.query:
+    # New: load query from a Python module if specified
+    if args.get_query_from_python_module:
+        try:
+            module_spec, sep, var_name = args.get_query_from_python_module.partition(
+                ":"
+            )
+            if not sep:
+                logger.error(
+                    "Invalid format for --get-query-from-python-module. Expected module_path:variable_name."
+                )
+                sys.exit(1)
+            mod = importlib.import_module(module_spec)
+            query_str = getattr(mod, var_name, None)
+            if not isinstance(query_str, str):
+                logger.error("The specified variable from module is not a string.")
+                sys.exit(1)
+            sql_content = query_str
+            source_description = args.get_query_from_python_module
+            logger.info(
+                f"Loaded SQL from module variable: {args.get_query_from_python_module}"
+            )
+        except Exception as e:
+            logger.error(f"Error loading query from module: {e}")
+            sys.exit(1)
+    elif args.query:
         sql_content = args.query
         source_description = "query string"
     elif args.file:
@@ -433,10 +458,9 @@ def handle_exec(args, client: QuestDBClient):
         source_description = "standard input"
         if not sql_content:
             logger.warning("Received empty input from stdin.")
-            sys.exit(1)  # Exit if stdin is used but empty
+            sys.exit(1)
     else:
-        logger.warning("No SQL query provided via argument, file, or stdin.")
-        # Consider printing help: parser_exec.print_help(sys.stderr) needs parser passed in
+        logger.warning("No SQL query provided via argument, file, module, or stdin.")
         sys.exit(1)
 
     # 2. Extract Statements (same as before)
@@ -884,7 +908,7 @@ def main():
     # --- EXEC Sub-command ---
     parser_exec = subparsers.add_parser(
         "exec",
-        help="Execute SQL statement(s) using /exec (returns JSON).\nReads SQL from --query, --file, or stdin.",
+        help="Execute SQL statement(s) using /exec (returns JSON).\nReads SQL from --query, --file, --get-query-from-python-module, or stdin.",
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
     )
@@ -899,6 +923,12 @@ def main():
     query_input_group.add_argument("-q", "--query", help="SQL query string to execute.")
     query_input_group.add_argument(
         "-f", "--file", help="Path to file containing SQL statements."
+    )
+    # New option: get query from python module (e.g. a_module.b_module:my_sql_statement)
+    query_input_group.add_argument(
+        "-P",
+        "--get-query-from-python-module",
+        help="Get query from a Python module in the format 'module_path:variable_name'.",
     )
     parser_exec.add_argument(
         "-l",
