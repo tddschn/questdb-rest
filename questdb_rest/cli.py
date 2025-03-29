@@ -20,6 +20,7 @@ import logging
 from getpass import getpass
 from pathlib import Path
 from typing import Callable, Dict, Any, Tuple
+import os  # ensure os is imported
 
 # Import the client and exceptions from the library
 from questdb_rest import (
@@ -662,6 +663,29 @@ def handle_chk(args, client: QuestDBClient):
         sys.exit(130)
 
 
+def handle_gen_config(args, client: Any = None):
+    """Generates a default config file at ~/.questdb-rest/config.json."""
+    config_dir = os.path.expanduser("~/.questdb-rest")
+    config_file = os.path.join(config_dir, "config.json")
+    default_config = {
+        "host": "localhost",
+        "port": 9000,
+        "user": "",
+        "password": "",
+        "timeout": 60,
+        "scheme": "http",
+    }
+    try:
+        os.makedirs(config_dir, exist_ok=True)
+        with open(config_file, "w") as cf:
+            json.dump(default_config, cf, indent=2)
+        print(f"Default config file generated at {config_file}")
+    except Exception as e:
+        print(f"Error generating config file: {e}")
+        sys.exit(1)
+    sys.exit(0)
+
+
 # --- Main Execution ---
 def main():
     parser = argparse.ArgumentParser(
@@ -714,6 +738,11 @@ def main():
         "--dry-run",
         action="store_true",
         help="Simulate API calls without sending them. Logs intended actions.",
+    )
+    parser.add_argument(
+        "--config",
+        help="Path to a config JSON file (overrides default).",
+        default=None,
     )
 
     subparsers = parser.add_subparsers(
@@ -943,23 +972,44 @@ def main():
     parser_chk.add_argument("table_name", help="Name of the table to check.")
     parser_chk.set_defaults(func=handle_chk)
 
+    # --- GEN-CONFIG Sub-command ---
+    parser_gen_config = subparsers.add_parser(
+        "gen-config",
+        help="Generate a default config file at ~/.questdb-rest/config.json",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=False,
+    )
+    parser_gen_config.set_defaults(func=handle_gen_config)
+
     # --- Parse Arguments ---
     try:
         args = parser.parse_args()
 
-        # Validation (moved password prompt logic here)
+        # --- Load config for password if available ---
+        import os
+
         actual_password = args.password
-        if (
-            args.user and not args.password and not args.dry_run
-        ):  # Don't prompt in dry-run
-            try:
-                actual_password = getpass(f"Password for user '{args.user}': ")
-                if not actual_password:
-                    logger.warning("Password required but not provided.")
-                    sys.exit(1)
-            except (EOFError, KeyboardInterrupt):
-                logger.info("\nOperation cancelled during password input.")
-                sys.exit(130)  # Use 130 for Ctrl+C during prompt
+        if args.user and not args.password and not args.dry_run:
+            config_file = os.path.expanduser("~/.questdb-rest/config.json")
+            config = {}
+            if os.path.exists(config_file):
+                try:
+                    with open(config_file, "r") as cf:
+                        config = json.load(cf)
+                except Exception as e:
+                    logger.debug(f"Error loading config file {config_file}: {e}")
+            if "password" in config:
+                actual_password = config["password"]
+                logger.info("Using password from config file.")
+            else:
+                try:
+                    actual_password = getpass(f"Password for user '{args.user}': ")
+                    if not actual_password:
+                        logger.warning("Password required but not provided.")
+                        sys.exit(1)
+                except (EOFError, KeyboardInterrupt):
+                    logger.info("\nOperation cancelled during password input.")
+                    sys.exit(130)
 
         # Validate imp --name-func arguments
         if args.command == "imp":
@@ -990,13 +1040,16 @@ def main():
     client = None
     if not args.dry_run:
         try:
-            client = QuestDBClient(
-                host=args.host,
-                port=args.port,
-                user=args.user,
-                password=actual_password,  # Use potentially prompted password
-                timeout=args.timeout,
-            )
+            if args.config:
+                client = QuestDBClient.from_config_file(args.config)
+            else:
+                client = QuestDBClient(
+                    host=args.host,
+                    port=args.port,
+                    user=args.user,
+                    password=actual_password,  # Use potentially prompted password
+                    timeout=args.timeout,
+                )
         except (QuestDBError, ValueError) as e:
             logger.error(f"Failed to initialize QuestDB client: {e}")
             sys.exit(1)

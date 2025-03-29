@@ -72,6 +72,33 @@ class QuestDBClient:
             timeout: Request timeout in seconds.
             scheme: URL scheme (http or https).
         """
+        # --- Load config file (if exists) ---
+        import os
+
+        config_file = os.path.expanduser("~/.questdb-rest/config.json")
+        if os.path.exists(config_file):
+            try:
+                with open(config_file, "r") as cf:
+                    config = json.load(cf)
+            except Exception as e:
+                logger.warning(f"Error loading config file {config_file}: {e}")
+                config = {}
+        else:
+            config = {}
+        # Override parameters with config values if still at default
+        if host == "localhost" and "host" in config:
+            host = config["host"]
+        if port == QuestDBClient.DEFAULT_PORT and "port" in config:
+            port = config["port"]
+        if user is None and "user" in config:
+            user = config["user"]
+        if password is None and "password" in config:
+            password = config["password"]
+        if timeout == QuestDBClient.DEFAULT_TIMEOUT and "timeout" in config:
+            timeout = config["timeout"]
+        if scheme == "http" and "scheme" in config:
+            scheme = config["scheme"]
+        # --- End config loading ---
         if not host:
             raise ValueError("Host cannot be empty")
         if not isinstance(port, int) or port <= 0:
@@ -81,6 +108,25 @@ class QuestDBClient:
         self.timeout = timeout
         self.auth = (user, password) if user else None
         logger.debug(f"QuestDBClient initialized for {self.base_url}")
+
+    @classmethod
+    def from_config_file(cls, config_path: str) -> "QuestDBClient":
+        with open(config_path, "r") as cf:
+            config = json.load(cf)
+        host = config.get("host", "localhost")
+        port = config.get("port", cls.DEFAULT_PORT)
+        user = config.get("user", None)
+        password = config.get("password", None)
+        timeout = config.get("timeout", cls.DEFAULT_TIMEOUT)
+        scheme = config.get("scheme", "http")
+        return cls(
+            host=host,
+            port=port,
+            user=user,
+            password=password,
+            timeout=timeout,
+            scheme=scheme,
+        )
 
     def _build_url(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> str:
         """Builds the full URL for an API endpoint."""
