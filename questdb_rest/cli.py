@@ -542,7 +542,7 @@ def handle_exec(args, client: QuestDBClient):
 
             # New markdown formatting for exec output
             if (
-                args.markdown
+                (args.markdown or args.psql)
                 and isinstance(response_json, dict)
                 and "columns" in response_json
                 and "dataset" in response_json
@@ -552,7 +552,12 @@ def handle_exec(args, client: QuestDBClient):
 
                     headers = [col["name"] for col in response_json["columns"]]
                     table = response_json["dataset"]
-                    md_table = tabulate(table, headers=headers, tablefmt="github")
+                    fmt = "psql"
+                    if args.psql:
+                        fmt = "psql"
+                    elif args.markdown:
+                        fmt = "github"
+                    md_table = tabulate(table, headers=headers, tablefmt=fmt)
                     sys.stdout.write(md_table + "\n")
                 except ImportError:
                     sys.stdout.write(
@@ -991,11 +996,19 @@ def main():
         help="Stop execution if any SQL statement fails.",
     )
     # New markdown output option
-    parser_exec.add_argument(
+    exec_format_group = parser_exec.add_mutually_exclusive_group()
+    exec_format_group.add_argument(
         "-m",
         "--markdown",
         action="store_true",
         help="Display query result in Markdown table format using tabulate.",
+    )
+    # -p, --psql format
+    exec_format_group.add_argument(
+        "-p",
+        "--psql",
+        action="store_true",
+        help="Display query result in PostgreSQL table format using tabulate.",
     )
     parser_exec.set_defaults(func=handle_exec)
 
