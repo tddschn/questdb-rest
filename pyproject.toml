@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "questdb-cli"
-version = "1.0.2"
+version = "1.0.3"
 description = "QuestDB REST API Python client library and CLI"
 authors = ["Teddy Xinyuan Chen <45612704+tddschn@users.noreply.github.com>"]
 readme = "README.md"
