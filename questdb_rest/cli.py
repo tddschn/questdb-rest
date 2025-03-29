@@ -509,9 +509,30 @@ def handle_exec(args, client: QuestDBClient):
                 # Simplification: always print separator after the first statement's output.
                 sys.stdout.write(json_separator)
 
-            # Print successful JSON response
-            json.dump(response_json, sys.stdout, indent=2)
-            sys.stdout.write("\n")
+            # New markdown formatting for exec output
+            if (
+                args.markdown
+                and isinstance(response_json, dict)
+                and "columns" in response_json
+                and "dataset" in response_json
+            ):
+                try:
+                    from tabulate import tabulate
+
+                    headers = [col["name"] for col in response_json["columns"]]
+                    table = response_json["dataset"]
+                    md_table = tabulate(table, headers=headers, tablefmt="github")
+                    sys.stdout.write(md_table + "\n")
+                except ImportError:
+                    sys.stdout.write(
+                        "Tabulate library not installed. Please install 'tabulate'.\n"
+                    )
+                    json.dump(response_json, sys.stdout, indent=2)
+                    sys.stdout.write("\n")
+            else:
+                json.dump(response_json, sys.stdout, indent=2)
+                sys.stdout.write("\n")
+
             logger.info(f"Statement {i + 1} executed successfully.")
 
         except QuestDBAPIError as e:
@@ -924,6 +945,13 @@ def main():
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Stop execution if any SQL statement fails.",
+    )
+    # New markdown output option
+    parser_exec.add_argument(
+        "-m",
+        "--markdown",
+        action="store_true",
+        help="Display query result in Markdown table format using tabulate.",
     )
     parser_exec.set_defaults(func=handle_exec)
 
