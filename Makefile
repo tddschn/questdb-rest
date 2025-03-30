@@ -24,4 +24,7 @@ push:
 yapf:
 	poetry run yapf -i -vv **/*.py
 
+gitingest:
+	gitingest questdb_rest -o qdb-cli.txt
+
 .PHONE: *
