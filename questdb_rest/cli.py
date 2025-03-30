@@ -1,3 +1,4 @@
+# --- START OF MODIFIED cli.py ---
 #!/usr/bin/env python3
 
 
@@ -9,6 +10,7 @@
 #     # requests is now a dependency of questdb_rest
 #     "sqlparse",
 #     "icecream",
+#     "tabulate", # Added for exec --markdown/--psql
 #     "./questdb_rest.py" # Include the library file as a dependency
 # ]
 # ///
@@ -186,6 +188,16 @@ def simulate_chk(args):
     print(json.dumps({"dry_run": True, "status": "Exists (Simulated)"}, indent=2))
 
 
+def simulate_schema(args, table_name):
+    logger.info(f"[DRY-RUN] Simulating schema fetch for table '{table_name}':")
+    query = f'SHOW CREATE TABLE "{table_name}";'  # Quote table name
+    logger.info(f"[DRY-RUN]   Would execute query: {query}")
+    # Simulate the output format: just the CREATE TABLE statement string
+    print(
+        f'CREATE TABLE "{table_name}" (ts TIMESTAMP, val DOUBLE) TIMESTAMP(ts) PARTITION BY DAY; -- (Simulated)'
+    )
+
+
 # --- Command Handlers (Refactored to use QuestDBClient) ---
 
 
@@ -274,7 +286,7 @@ def handle_imp(args, client: QuestDBClient):
             # --- Dry Run Check ---
             if args.dry_run:
                 simulate_imp(args, file_path, table_name, schema_source_desc)
-                # Add separator if not the first file
+                # Add separator if not the first file and json format
                 if i > 0 and args.fmt == "json":
                     sys.stdout.write(json_separator)
                 continue  # Skip actual import in dry-run
@@ -484,9 +496,18 @@ def handle_exec(args, client: QuestDBClient):
     logger.info(f"Found {len(statements)} statement(s) in {source_description}.")
 
     any_statement_failed = False
-    json_separator = "\n"
+    json_separator = "\n"  # Separator between JSON outputs for multiple statements
+    markdown_psql_separator = "\n\n"  # Separator for markdown/psql tables
+    output_separator = ""  # Will be set based on output format
+
+    # Determine the separator based on the output format requested
+    if args.markdown or args.psql:
+        output_separator = markdown_psql_separator
+    elif not args.one:  # Default JSON output uses newline
+        output_separator = json_separator
 
     # 3. Execute Statements Iteratively
+    first_output_written = False
     for i, statement in enumerate(statements):
         logger.info(f"Executing statement {i + 1}/{len(statements)}...")
         logger.debug(
@@ -496,8 +517,9 @@ def handle_exec(args, client: QuestDBClient):
         # --- Dry Run Check ---
         if args.dry_run:
             simulate_exec(args, statement, i + 1, len(statements))
-            if i > 0:  # Print separator if not first dry-run statement
-                sys.stdout.write(json_separator)
+            if first_output_written:  # Print separator if not first dry-run statement
+                sys.stdout.write(output_separator)
+            first_output_written = True
             continue  # Skip actual execution
 
         try:
@@ -513,16 +535,15 @@ def handle_exec(args, client: QuestDBClient):
             )
 
             # Check for errors within the JSON response (QuestDB API errors)
-            # Note: QuestDBAPIError exception handles HTTP errors, this checks logical errors in 200 OK response
             if isinstance(response_json, dict) and "error" in response_json:
                 logger.error(
                     f"Error executing statement {i + 1}: {response_json['error']}"
                 )
                 # Print simplified error to stdout, detailed error already logged by client
-                sys.stdout.write(
+                sys.stderr.write(
                     f"-- Statement {i + 1} Error --\nError: {response_json['error']}\n"
                 )
-                sys.stdout.write(f"Query: {response_json.get('query', statement)}\n")
+                sys.stderr.write(f"Query: {response_json.get('query', statement)}\n")
                 any_statement_failed = True
                 if args.stop_on_error:
                     logger.warning(
@@ -534,23 +555,29 @@ def handle_exec(args, client: QuestDBClient):
                     continue  # Skip to next statement
 
             # Print separator if this is not the first successful output
-            if i > 0:
-                # Check if the *previous* one resulted in output (wasn't a skipped error)
-                # This logic might need refinement if complex error/skip patterns occur.
-                # Simplification: always print separator after the first statement's output.
-                sys.stdout.write(json_separator)
+            if first_output_written and output_separator:
+                sys.stdout.write(output_separator)
 
+            # --- Handle Output Formatting ---
+            output_written_this_statement = False
             if args.one:
-                # get json path dataset[0][0] and print
-                # it's a str, not json
                 if isinstance(response_json, dict) and "dataset" in response_json:
                     if (
                         len(response_json["dataset"]) > 0
                         and len(response_json["dataset"][0]) > 0
                     ):
                         sys.stdout.write(f"{response_json['dataset'][0][0]}\n")
+                        output_written_this_statement = True
+                    else:
+                        logger.debug(
+                            f"Statement {i + 1}: --one specified, but dataset was empty or lacked rows/columns."
+                        )
+                        # Optionally print an empty line or nothing? Let's print nothing.
+                else:
+                    logger.debug(
+                        f"Statement {i + 1}: --one specified, but response was not a dict or lacked 'dataset'."
+                    )
 
-            # New markdown formatting for exec output
             elif (
                 (args.markdown or args.psql)
                 and isinstance(response_json, dict)
@@ -562,34 +589,69 @@ def handle_exec(args, client: QuestDBClient):
 
                     headers = [col["name"] for col in response_json["columns"]]
                     table = response_json["dataset"]
-                    fmt = "psql"
-                    if args.psql:
-                        fmt = "psql"
-                    elif args.markdown:
-                        fmt = "github"
-                    md_table = tabulate(table, headers=headers, tablefmt=fmt)
-                    sys.stdout.write(md_table + "\n")
+                    # Only print table if there are columns and/or data
+                    if headers or table:
+                        fmt = (
+                            "psql" if args.psql else "github"
+                        )  # Default to github if --markdown
+                        md_table = tabulate(table, headers=headers, tablefmt=fmt)
+                        sys.stdout.write(md_table + "\n")
+                        output_written_this_statement = True
+                    else:
+                        logger.debug(
+                            f"Statement {i + 1}: --markdown/psql specified, but no columns or data returned."
+                        )
+                        # Print empty line? Let's print nothing.
                 except ImportError:
-                    sys.stdout.write(
-                        "Tabulate library not installed. Please install 'tabulate'.\n"
+                    sys.stderr.write(
+                        "Tabulate library not installed. Please install 'tabulate'. Falling back to JSON.\n"
+                    )
+                    # Fallback to JSON dump if tabulate is missing
+                    json.dump(response_json, sys.stdout, indent=2)
+                    sys.stdout.write("\n")
+                    output_written_this_statement = True
+                except Exception as tab_err:
+                    # Catch other tabulate errors
+                    logger.error(
+                        f"Error during tabulate formatting for statement {i + 1}: {tab_err}"
+                    )
+                    sys.stderr.write(
+                        f"Error during table formatting: {tab_err}. Falling back to JSON.\n"
                     )
                     json.dump(response_json, sys.stdout, indent=2)
                     sys.stdout.write("\n")
-            else:
-                json.dump(response_json, sys.stdout, indent=2)
-                sys.stdout.write("\n")
+                    output_written_this_statement = True
+
+            else:  # Default: JSON output
+                # Only print JSON if it's not just a simple DDL response (like {'ddl': 'OK'})
+                # unless it's the *only* thing in the response.
+                if not (
+                    len(response_json) == 1
+                    and "ddl" in response_json
+                    and response_json["ddl"] == "OK"
+                ):
+                    json.dump(response_json, sys.stdout, indent=2)
+                    sys.stdout.write("\n")
+                    output_written_this_statement = True
+                else:
+                    logger.debug(
+                        f"Statement {i + 1}: Suppressing simple DDL OK response in default JSON output."
+                    )
+
+            if output_written_this_statement:
+                first_output_written = True  # Mark that we have produced output
 
             logger.info(f"Statement {i + 1} executed successfully.")
 
         except QuestDBAPIError as e:
             # Error logged by client, just record failure and decide stop/continue
-            logger.warning(f"Statement {i + 1} failed with API error.")
-            # Output error info from exception to stdout for visibility
-            sys.stdout.write(f"-- Statement {i + 1} Error --\nError: {e}\n")
+            logger.warning(f"Statement {i + 1} failed with API error: {e}")
+            # Output error info from exception to stderr for visibility
+            sys.stderr.write(f"-- Statement {i + 1} Error --\nError: {e}\n")
             if e.response_data and "query" in e.response_data:
-                sys.stdout.write(f"Query: {e.response_data['query']}\n")
+                sys.stderr.write(f"Query: {e.response_data['query']}\n")
             elif "query" in statement:  # Fallback to original statement
-                sys.stdout.write(f"Query: {statement}\n")
+                sys.stderr.write(f"Query: {statement}\n")
 
             any_statement_failed = True
             if args.stop_on_error:
@@ -601,6 +663,7 @@ def handle_exec(args, client: QuestDBClient):
                 logger.warning("Continuing execution (stop-on-error disabled).")
         except QuestDBError as e:  # Catch other client errors (connection etc.)
             logger.warning(f"Statement {i + 1} failed: {e}")
+            sys.stderr.write(f"-- Statement {i + 1} Error --\nError: {e}\n")
             any_statement_failed = True
             if args.stop_on_error:
                 logger.warning(
@@ -638,6 +701,7 @@ def handle_exp(args, client: QuestDBClient):
     stream_enabled = bool(args.output_file)
     output_file_handle = None
     output_target_desc = "stdout"
+    response = None  # Initialize response variable
 
     try:
         # Get the response object from the client
@@ -658,7 +722,8 @@ def handle_exp(args, client: QuestDBClient):
                 output_file_handle = open(output_file_path, "wb")
                 # Iterate over content chunks and write to file
                 for chunk in response.iter_content(chunk_size=8192):
-                    output_file_handle.write(chunk)
+                    if chunk:  # filter out keep-alive new chunks
+                        output_file_handle.write(chunk)
                 logger.info(f"Successfully exported data to {output_target_desc}")
             except IOError as e:
                 logger.warning(
@@ -667,9 +732,10 @@ def handle_exp(args, client: QuestDBClient):
                 sys.exit(1)
         else:
             # Write text response directly to stdout
-            output_text = (
-                response.text
-            )  # Assumes content fits in memory if not streaming
+            # Need to handle potential streaming even for stdout if necessary
+            # For simplicity now, load text if not streaming to file.
+            # If streaming is needed for stdout, iter_content should be used here too.
+            output_text = response.text
             sys.stdout.write(output_text)
             # Ensure the output ends with a newline if it doesn't already
             if output_text and not output_text.endswith("\n"):
@@ -686,8 +752,8 @@ def handle_exp(args, client: QuestDBClient):
         # Ensure the file handle is closed if it was opened
         if output_file_handle:
             output_file_handle.close()
-            # Close the response connection if streaming was used and file writing finished/failed
-        if stream_enabled and "response" in locals() and response:
+        # Close the response connection if streaming was used, regardless of target
+        if stream_enabled and response:
             response.close()
 
 
@@ -729,6 +795,172 @@ def handle_chk(args, client: QuestDBClient):
     except KeyboardInterrupt:
         logger.info("\nOperation cancelled by user.")
         sys.exit(130)
+
+
+# --- NEW: handle_schema ---
+def handle_schema(args, client: QuestDBClient):
+    """Handles the schema command, fetching CREATE TABLE statements."""
+    any_table_failed = False
+    output_separator = "\n\n"  # Separate multiple CREATE TABLE statements
+
+    if not args.dry_run:
+        log_level = logging.WARNING
+        logger.setLevel(log_level)
+
+    # Iterate through provided table names
+    first_output_written = False
+    for i, table_name in enumerate(args.table_names):
+        logger.info(
+            f"Fetching schema for table {i + 1}/{len(args.table_names)}: '{table_name}'..."
+        )
+
+        # --- Dry Run Check ---
+        if args.dry_run:
+            simulate_schema(args, table_name)
+            if first_output_written:
+                sys.stdout.write(output_separator)
+            first_output_written = True
+            continue  # Skip actual execution
+
+        # --- Actual Execution ---
+        # Quote the table name for safety, especially if it contains special characters
+        # QuestDB syntax typically uses double quotes for identifiers.
+        # Handle potential existing quotes in table_name? Assume simple names for now.
+        safe_table_name = table_name.replace('"', '""')  # Basic escaping if needed
+        statement = f'SHOW CREATE TABLE "{safe_table_name}";'
+
+        try:
+            response_json = client.exec(
+                query=statement,
+                # These exec options are generally not relevant for SHOW CREATE TABLE
+                limit=None,
+                count=None,
+                nm=None,
+                timings=None,
+                explain=None,
+                quote_large_num=None,
+                statement_timeout=args.statement_timeout,
+            )
+
+            # Check for errors within the JSON response
+            if isinstance(response_json, dict) and "error" in response_json:
+                logger.error(
+                    f"Error fetching schema for '{table_name}': {response_json['error']}"
+                )
+                sys.stderr.write(
+                    f"-- Error for table '{table_name}' --\nError: {response_json['error']}\n"
+                )
+                any_table_failed = True
+                if args.stop_on_error:
+                    logger.warning(
+                        "Stopping execution due to error (stop-on-error enabled)."
+                    )
+                    sys.exit(1)
+                else:
+                    logger.warning("Continuing execution (stop-on-error disabled).")
+                    continue  # Skip to next table
+
+            # Extract the CREATE TABLE statement (equivalent to --one in exec)
+            create_statement = None
+            if isinstance(response_json, dict) and "dataset" in response_json:
+                if (
+                    len(response_json["dataset"]) > 0
+                    and len(response_json["dataset"][0]) > 0
+                ):
+                    create_statement = response_json["dataset"][0][0]
+                else:
+                    logger.warning(
+                        f"Received empty dataset for 'SHOW CREATE TABLE {table_name}'."
+                    )
+                    # Maybe the table exists but the command returned unexpectedly?
+                    sys.stderr.write(
+                        f"-- Warning for table '{table_name}' --\nReceived empty result for SHOW CREATE TABLE.\n"
+                    )
+                    any_table_failed = True  # Treat as failure
+                    if args.stop_on_error:
+                        sys.exit(1)
+                    else:
+                        continue
+
+            else:
+                logger.error(
+                    f"Unexpected response format for 'SHOW CREATE TABLE {table_name}': {response_json}"
+                )
+                sys.stderr.write(
+                    f"-- Error for table '{table_name}' --\nUnexpected response format from server.\n"
+                )
+                any_table_failed = True
+                if args.stop_on_error:
+                    sys.exit(1)
+                else:
+                    continue
+
+            # Print separator if this is not the first successful output
+            if first_output_written:
+                sys.stdout.write(output_separator)
+
+            # Print the extracted CREATE TABLE statement
+            if create_statement:
+                sys.stdout.write(create_statement)
+                # Ensure trailing newline (though SHOW CREATE TABLE usually includes one)
+                if not create_statement.endswith("\n"):
+                    sys.stdout.write("\n")
+                first_output_written = True
+                logger.info(f"Successfully fetched schema for '{table_name}'.")
+
+        except QuestDBAPIError as e:
+            logger.warning(
+                f"Fetching schema for '{table_name}' failed with API error: {e}"
+            )
+            sys.stderr.write(f"-- Error for table '{table_name}' --\nError: {e}\n")
+            any_table_failed = True
+            if args.stop_on_error:
+                logger.warning(
+                    "Stopping execution due to API error (stop-on-error enabled)."
+                )
+                sys.exit(1)
+            else:
+                logger.warning("Continuing execution (stop-on-error disabled).")
+        except QuestDBError as e:  # Catch other client errors (connection etc.)
+            logger.warning(f"Fetching schema for '{table_name}' failed: {e}")
+            sys.stderr.write(f"-- Error for table '{table_name}' --\nError: {e}\n")
+            any_table_failed = True
+            if args.stop_on_error:
+                logger.warning(
+                    "Stopping execution due to error (stop-on-error enabled)."
+                )
+                sys.exit(1)
+            else:
+                logger.warning("Continuing execution (stop-on-error disabled).")
+        except (
+            IndexError,
+            KeyError,
+            TypeError,
+        ) as e:  # Catch errors during result extraction
+            logger.error(
+                f"Error parsing response for 'SHOW CREATE TABLE {table_name}': {e}"
+            )
+            sys.stderr.write(
+                f"-- Error for table '{table_name}' --\nFailed to parse response from server: {e}\n"
+            )
+            any_table_failed = True
+            if args.stop_on_error:
+                sys.exit(1)
+            else:
+                continue
+        except KeyboardInterrupt:
+            logger.info(
+                f"\nOperation cancelled by user while fetching schema for '{table_name}'."
+            )
+            sys.exit(130)
+
+    # --- Final Exit Status ---
+    if any_table_failed:
+        logger.warning("One or more table schemas could not be fetched.")
+        sys.exit(2)  # Indicate partial failure if stop-on-error was false
+    else:
+        logger.info("All requested schemas fetched successfully.")
+        sys.exit(0)
 
 
 def handle_gen_config(args, client: Any = None):
@@ -774,33 +1006,42 @@ def main():
     parser.add_argument(
         "-H",
         "--host",
-        default=DEFAULT_HOST,
-        help=f"QuestDB server host (default: {DEFAULT_HOST}).",
+        default=None,  # Default handled by client init (checks config file first)
+        help=f"QuestDB server host.",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=DEFAULT_PORT,
-        help=f"QuestDB REST API port (default: {DEFAULT_PORT}).",
+        default=None,  # Default handled by client init
+        help=f"QuestDB REST API port.",
     )
-    parser.add_argument("-u", "--user", help="Username for basic authentication.")
+    parser.add_argument(
+        "-u", "--user", default=None, help="Username for basic authentication."
+    )
     parser.add_argument(
         "-p",
         "--password",
-        help="Password for basic authentication. If -u is given but -p is not, will prompt securely.",
+        default=None,
+        help="Password for basic authentication. If -u is given but -p is not, will prompt securely unless password is in config.",
     )
     parser.add_argument(
         "--timeout",
         type=int,
-        default=QuestDBClient.DEFAULT_TIMEOUT,
-        help=f"Request timeout in seconds (default: {QuestDBClient.DEFAULT_TIMEOUT}).",
+        default=None,  # Default handled by client init
+        help="Request timeout in seconds.",
+    )
+    parser.add_argument(
+        "--scheme",
+        default=None,  # Default handled by client init
+        choices=["http", "https"],
+        help="Connection scheme (http or https).",
     )
     log_level_group = parser.add_mutually_exclusive_group()
     log_level_group.add_argument(
         "-W",
         "--warning",
         action="store_true",
-        help="Use warning level logging",
+        help="Use warning level logging (default is INFO).",
     )
     log_level_group.add_argument(
         "-D",
@@ -816,8 +1057,15 @@ def main():
     )
     parser.add_argument(
         "--config",
-        help="Path to a config JSON file (overrides default).",
+        help="Path to a specific config JSON file (overrides default ~/.questdb-rest/config.json).",
         default=None,
+    )
+    # Shared stop-on-error argument for commands that process multiple items
+    parser.add_argument(
+        "--stop-on-error",
+        action=argparse.BooleanOptionalAction,
+        default=True,  # Default to stopping on error
+        help="Stop execution immediately if any item (file/statement/table) fails.",
     )
 
     subparsers = parser.add_subparsers(
@@ -926,12 +1174,7 @@ def main():
         default=True,
         help="Automatically create table if it does not exist.",
     )
-    parser_imp.add_argument(
-        "--stop-on-error",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Stop execution immediately if importing any file fails.",
-    )
+    # --stop-on-error is now global
     parser_imp.set_defaults(func=handle_imp)
 
     # --- EXEC Sub-command ---
@@ -955,7 +1198,7 @@ def main():
     )
     # New option: get query from python module (e.g. a_module.b_module:my_sql_statement)
     query_input_group.add_argument(
-        "-P",
+        "-G",  # Changed short opt to avoid conflict with imp -P
         "--get-query-from-python-module",
         help="Get query from a Python module in the format 'module_path:variable_name'.",
     )
@@ -999,32 +1242,26 @@ def main():
         type=int,
         help="Query timeout in milliseconds (per statement).",
     )
-    parser_exec.add_argument(
-        "--stop-on-error",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Stop execution if any SQL statement fails.",
-    )
-    # New markdown output option
+    # --stop-on-error is now global
+    # Output formatting options
     exec_format_group = parser_exec.add_mutually_exclusive_group()
     exec_format_group.add_argument(
-        "-o",
+        "-1",  # Changed short opt to avoid conflict with imp -o
         "--one",
         action="store_true",
-        help="Extract and Display the first item in query result",
+        help="Output only the value of the first column of the first row.",
     )
     exec_format_group.add_argument(
         "-m",
         "--markdown",
         action="store_true",
-        help="Display query result in Markdown table format using tabulate.",
+        help="Display query result(s) in Markdown table format using tabulate.",
     )
-    # -p, --psql format
     exec_format_group.add_argument(
-        "-p",
+        "-P",  # Changed short opt to avoid conflict with global -p
         "--psql",
         action="store_true",
-        help="Display query result in PostgreSQL table format using tabulate.",
+        help="Display query result(s) in PostgreSQL table format using tabulate.",
     )
     parser_exec.set_defaults(func=handle_exec)
 
@@ -1060,7 +1297,7 @@ def main():
     # --- CHK Sub-command ---
     parser_chk = subparsers.add_parser(
         "chk",
-        help="Check if a table exists using /chk (returns JSON).",
+        help="Check if a table exists using /chk (returns JSON). Exit code 0 if exists, 3 if not.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=False,
     )
@@ -1074,6 +1311,31 @@ def main():
     parser_chk.add_argument("table_name", help="Name of the table to check.")
     parser_chk.set_defaults(func=handle_chk)
 
+    # --- SCHEMA Sub-command (NEW) ---
+    parser_schema = subparsers.add_parser(
+        "schema",
+        help="Fetch CREATE TABLE statement(s) for one or more tables.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=False,
+    )
+    parser_schema.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help="Show this help message and exit.",
+    )
+    parser_schema.add_argument(
+        "table_names", nargs="+", help="Name(s) of the table(s) to get schema for."
+    )
+    # Inherits global --stop-on-error
+    parser_schema.add_argument(
+        "--statement-timeout",  # Allow timeout per table schema fetch
+        type=int,
+        help="Query timeout in milliseconds (per table).",
+    )
+    parser_schema.set_defaults(func=handle_schema)
+
     # --- GEN-CONFIG Sub-command ---
     parser_gen_config = subparsers.add_parser(
         "gen-config",
@@ -1081,88 +1343,185 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=False,
     )
-    parser_gen_config.set_defaults(func=handle_gen_config)
+    parser_gen_config.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help="Show this help message and exit.",
+    )
+    # No client needed for gen-config
+    parser_gen_config.set_defaults(func=handle_gen_config, requires_client=False)
 
     # --- Parse Arguments ---
     try:
         args = parser.parse_args()
-
-        # --- Load config for password if available ---
-        import os
-
-        actual_password = args.password
-        if args.user and not args.password and not args.dry_run:
-            config_file = os.path.expanduser("~/.questdb-rest/config.json")
-            config = {}
-            if os.path.exists(config_file):
-                try:
-                    with open(config_file, "r") as cf:
-                        config = json.load(cf)
-                except Exception as e:
-                    logger.debug(f"Error loading config file {config_file}: {e}")
-            if "password" in config:
-                actual_password = config["password"]
-                logger.info("Using password from config file.")
-            else:
-                try:
-                    actual_password = getpass(f"Password for user '{args.user}': ")
-                    if not actual_password:
-                        logger.warning("Password required but not provided.")
-                        sys.exit(1)
-                except (EOFError, KeyboardInterrupt):
-                    logger.info("\nOperation cancelled during password input.")
-                    sys.exit(130)
-
-        # Validate imp --name-func arguments
-        if args.command == "imp":
-            if args.name_func == "add_prefix" and not args.name_func_prefix:
-                logger.debug(
-                    "Using default empty prefix for 'add_prefix' name function as --name-func-prefix was not provided."
-                )
-            elif args.name_func and args.name:
-                logger.warning(
-                    "Both --name and --name-func provided. Explicit --name will be used."
-                )
+        # Add requires_client default if not set by a specific command (like gen-config)
+        if not hasattr(args, "requires_client"):
+            args.requires_client = True
 
     except Exception as e:
         parser.print_usage(sys.stderr)
         logger.error(f"Argument parsing error: {e}")
         sys.exit(2)
 
-    # Set logging level
+    # Set logging level based on args
+    log_level = logging.INFO
     if args.warning:
-        logging.getLogger().setLevel(logging.WARNING)  # Set root logger level
-        logger.setLevel(logging.WARNING)
-        logger.debug("Debug logging enabled.")
+        log_level = logging.WARNING
     elif args.debug:
-        logging.getLogger().setLevel(logging.DEBUG)  # Set root logger level
-        logger.setLevel(logging.DEBUG)
-        logger.debug("Debug logging enabled.")
-    else:
-        logger.setLevel(logging.INFO)
+        log_level = logging.DEBUG
 
-    # --- Instantiate Client ---
-    # Do not instantiate client in dry-run mode to avoid connection attempts etc.
-    client = None
-    if not args.dry_run:
-        try:
-            if args.config:
-                client = QuestDBClient.from_config_file(args.config)
-            else:
-                client = QuestDBClient(
-                    host=args.host,
-                    port=args.port,
-                    user=args.user,
-                    password=actual_password,  # Use potentially prompted password
-                    timeout=args.timeout,
+    # Also set level for the CLI's own logger if needed for specific CLI messages
+    logger.setLevel(log_level)
+    if log_level == logging.DEBUG:
+        logger.debug("Debug logging enabled.")
+
+    # --- Handle Password Prompting ---
+    # This needs to happen *before* client initialization, but *after* parsing args
+    # Only prompt if a user is provided, no password is given, not dry run, and client is needed
+    actual_password = args.password
+    if args.requires_client and args.user and not args.password and not args.dry_run:
+        # Check config file *first* before prompting
+        config_to_check = args.config or os.path.expanduser(
+            "~/.questdb-rest/config.json"
+        )
+        config = {}
+        if os.path.exists(config_to_check):
+            try:
+                with open(config_to_check, "r") as cf:
+                    config = json.load(cf)
+                # Only use password from config if user matches OR if config user is empty/not present
+                config_user = config.get("user")
+                if "password" in config and (
+                    args.user == config_user or not config_user
+                ):
+                    actual_password = config.get("password")
+                    if actual_password:  # Make sure password is not empty string
+                        logger.info("Using password from config file.")
+                    else:
+                        logger.debug(
+                            "Password found in config but is empty, will prompt."
+                        )
+                        actual_password = None  # Reset to trigger prompt
+            except Exception as e:
+                logger.debug(
+                    f"Error loading config file {config_to_check} for password check: {e}"
                 )
+
+        # Prompt if password wasn't loaded from config
+        if actual_password is None:  # Check again after attempting config load
+            try:
+                actual_password = getpass(f"Password for user '{args.user}': ")
+                if not actual_password:  # Handle empty input during prompt
+                    logger.warning("Password required but not provided.")
+                    sys.exit(1)
+            except (EOFError, KeyboardInterrupt):
+                logger.info("\nOperation cancelled during password input.")
+                sys.exit(130)
+
+    # --- Validate Command Specific Args ---
+    # Example: Validate imp --name-func arguments
+    if args.command == "imp":
+        if args.name_func == "add_prefix" and not args.name_func_prefix:
+            logger.debug(
+                "Using default empty prefix for 'add_prefix' name function as --name-func-prefix was not provided."
+            )
+        elif args.name_func and args.name:
+            logger.warning(
+                "Both --name and --name-func provided. Explicit --name will be used."
+            )
+
+    # --- Instantiate Client (if needed and not dry run) ---
+    client = None
+    if args.requires_client and not args.dry_run:
+        try:
+            client_kwargs = {
+                "host": args.host,
+                "port": args.port,
+                "user": args.user,
+                "password": actual_password,  # Use potentially prompted/config password
+                "timeout": args.timeout,
+                "scheme": args.scheme,
+            }
+            # Filter out None values so client uses its defaults/config loading
+            filtered_kwargs = {k: v for k, v in client_kwargs.items() if v is not None}
+
+            if args.config:
+                # If a specific config file is given via --config, use from_config_file
+                # We prioritize command-line args over the config file if both are present.
+                # The current client logic prioritizes args over default config (~/.questdb-rest/config.json)
+                # but from_config_file *only* uses the specified file.
+                # Let's stick to the standard constructor which handles merging:
+                # command-line > ~/.questdb-rest/config.json > defaults
+                # If --config is specified, maybe it should *override* ~/.questdb-rest?
+                # Current QuestDBClient init loads default config *then* overrides with args.
+                # Let's modify the client or create a helper to load a specific config *then* apply args.
+                # Simpler approach: Stick to default init which handles ~/.questdb-rest/config.json
+                # and let command-line args override everything.
+                # If user *really* wants --config to take precedence, they should avoid setting conflicting CLI args.
+                logger.debug(
+                    f"Initializing client with explicit config file: {args.config}"
+                )
+                # Option 1: Use existing logic (CLI args > default config > defaults)
+                # client = QuestDBClient(**filtered_kwargs) # Default handles ~/.questdb-rest
+
+                # Option 2: Prioritize explicit --config file
+                try:
+                    logger.info(
+                        f"Loading configuration from specified file: {args.config}"
+                    )
+                    client = QuestDBClient.from_config_file(args.config)
+                    # Now, override with any non-None CLI args
+                    if args.host is not None:
+                        client.base_url = f"{client.base_url.split('://')[0]}://{args.host}:{client.base_url.split(':')[-1].split('/')[0]}/"
+                    if args.port is not None:
+                        client.base_url = f"{client.base_url.split('://')[0]}://{client.base_url.split('://')[1].split(':')[0]}:{args.port}/"
+                    if args.user is not None:
+                        client.auth = (
+                            (args.user, actual_password) if args.user else None
+                        )
+                    elif client.auth and args.password is not None:
+                        client.auth = (
+                            client.auth[0],
+                            actual_password,
+                        )  # Update only password if user from config
+                    if args.timeout is not None:
+                        client.timeout = args.timeout
+                    if args.scheme is not None:
+                        client.base_url = (
+                            f"{args.scheme}://{client.base_url.split('://')[1]}"
+                        )
+                    logger.debug(
+                        f"Client initialized from {args.config} and updated with CLI args."
+                    )
+
+                except FileNotFoundError:
+                    logger.error(f"Config file not found: {args.config}")
+                    sys.exit(1)
+                except Exception as conf_err:
+                    logger.error(f"Error loading config file {args.config}: {conf_err}")
+                    sys.exit(1)
+
+            else:
+                # Standard initialization: uses CLI args > ~/.questdb-rest/config.json > defaults
+                logger.debug(
+                    "Initializing client using command-line arguments and default config."
+                )
+                client = QuestDBClient(**filtered_kwargs)
+
         except (QuestDBError, ValueError) as e:
             logger.error(f"Failed to initialize QuestDB client: {e}")
+            sys.exit(1)
+        except Exception as e:  # Catch other potential init errors
+            logger.error(
+                f"An unexpected error occurred during client initialization: {e}"
+            )
             sys.exit(1)
 
     # Call the appropriate handler function
     try:
-        # Pass the client instance to the handler (will be None in dry-run)
+        # Pass the client instance (or None) and args to the handler
         args.func(args, client)
     except KeyboardInterrupt:
         logger.info("\nOperation cancelled by user.")
@@ -1179,6 +1538,14 @@ def main():
 
 
 if __name__ == "__main__":
+    # Setup IceCream (optional, for debugging convenience if installed)
+    try:
+        from icecream import install
+
+        install()
+    except ImportError:  # icecream not installed
+        pass
+
     try:
         main()
     except SystemExit as e:
@@ -1187,3 +1554,5 @@ if __name__ == "__main__":
         # Final fallback
         logger.exception(f"An unexpected error occurred at the top level: {e}")
         sys.exit(1)
+
+# --- END OF MODIFIED cli.py ---
