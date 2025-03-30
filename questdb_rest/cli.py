@@ -540,8 +540,18 @@ def handle_exec(args, client: QuestDBClient):
                 # Simplification: always print separator after the first statement's output.
                 sys.stdout.write(json_separator)
 
+            if args.one:
+                # get json path dataset[0][0] and print
+                # it's a str, not json
+                if isinstance(response_json, dict) and "dataset" in response_json:
+                    if (
+                        len(response_json["dataset"]) > 0
+                        and len(response_json["dataset"][0]) > 0
+                    ):
+                        sys.stdout.write(f"{response_json['dataset'][0][0]}\n")
+
             # New markdown formatting for exec output
-            if (
+            elif (
                 (args.markdown or args.psql)
                 and isinstance(response_json, dict)
                 and "columns" in response_json
@@ -997,6 +1007,12 @@ def main():
     )
     # New markdown output option
     exec_format_group = parser_exec.add_mutually_exclusive_group()
+    exec_format_group.add_argument(
+        "-o",
+        "--one",
+        action="store_true",
+        help="Extract and Display the first item in query result",
+    )
     exec_format_group.add_argument(
         "-m",
         "--markdown",
