@@ -39,7 +39,7 @@ DEFAULT_PORT = 9000  # Use the default from the library/docs
 
 # --- Logging Setup ---
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format="%(levelname)s: %(message)s",
     stream=sys.stderr,
 )
@@ -1038,10 +1038,10 @@ def main():
     )
     log_level_group = parser.add_mutually_exclusive_group()
     log_level_group.add_argument(
-        "-W",
-        "--warning",
+        "-i",
+        "--info",
         action="store_true",
-        help="Use warning level logging (default is INFO).",
+        help="Use warning level logging (default is WARNING).",
     )
     log_level_group.add_argument(
         "-D",
@@ -1366,9 +1366,9 @@ def main():
         sys.exit(2)
 
     # Set logging level based on args
-    log_level = logging.INFO
-    if args.warning:
-        log_level = logging.WARNING
+    log_level = logging.WARNING
+    if args.info:
+        log_level = logging.INFO
     elif args.debug:
         log_level = logging.DEBUG
 
