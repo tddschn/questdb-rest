@@ -10,9 +10,11 @@ The REST API is very well defined: https://questdb.com/docs/reference/api/rest/,
     - [`imp` programmatically derives table name from filename when uploading CSVs](#imp-programmatically-derives-table-name-from-filename-when-uploading-csvs)
     - [`exec` supports multiple queries in one go](#exec-supports-multiple-queries-in-one-go)
     - [Query output parsing and formatting](#query-output-parsing-and-formatting)
-    - [Global options to fine tune log levels](#global-options-to-fine-tune-log-levels)
     - [`schema`](#schema)
     - [`chk`](#chk)
+  - [Usage](#usage)
+    - [Global options to fine tune log levels](#global-options-to-fine-tune-log-levels)
+    - [Configuring CLI - DB connection options](#configuring-cli---db-connection-options)
   - [PyPI packages and installation](#pypi-packages-and-installation)
   - [The Python API](#the-python-api)
 
@@ -57,6 +59,31 @@ The `/exec` endpoints only speaks JSON, this tool gives you options to format th
 
 For CSV output, use `questdb-cli exp` instead.
 
+### `schema`
+
+Convenience command to fetch schema for 1 or more tables. Hard to do without reading good chunk of the QuestDB doc. The web console supports copying schemas from the tables list.
+
+```
+qdb-cli schema equities_1d
+
+CREATE TABLE 'equities_1d' ( 
+	timestamp TIMESTAMP,
+	open DOUBLE,
+	high DOUBLE,
+	low DOUBLE,
+	close DOUBLE,
+	volume LONG,
+	ticker SYMBOL CAPACITY 1024 CACHE
+) timestamp(timestamp) PARTITION BY YEAR WAL
+WITH maxUncommittedRows=500000, o3MaxLag=600000000us
+DEDUP UPSERT KEYS(timestamp,ticker);
+```
+### `chk`
+
+The `chk` command to talk to `/chk` endpoint, which is used by the web console's CSV upload UI.
+
+## Usage
+
 ### Global options to fine tune log levels
 
 ```
@@ -97,28 +124,11 @@ options:
                         Stop execution immediately if any item (file/statement/table) fails.
 ```
 
-### `schema`
+### Configuring CLI - DB connection options
 
-Convenience command to fetch schema for 1 or more tables. Hard to do without reading good chunk of the QuestDB doc. The web console supports copying schemas from the tables list.
+Run `qdb-cli gen-config` and edit the generated config file to specify your DB's port, host, and auth info.
 
-```
-qdb-cli schema equities_1d
-
-CREATE TABLE 'equities_1d' ( 
-	timestamp TIMESTAMP,
-	open DOUBLE,
-	high DOUBLE,
-	low DOUBLE,
-	close DOUBLE,
-	volume LONG,
-	ticker SYMBOL CAPACITY 1024 CACHE
-) timestamp(timestamp) PARTITION BY YEAR WAL
-WITH maxUncommittedRows=500000, o3MaxLag=600000000us
-DEDUP UPSERT KEYS(timestamp,ticker);
-```
-### `chk`
-
-The `chk` command to talk to `/chk` endpoint, which is used by the web console's CSV upload UI.
+All options are optional and will use the default `localhost:9000` if not specified.
 
 ## PyPI packages and installation
 
