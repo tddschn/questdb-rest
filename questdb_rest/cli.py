@@ -233,8 +233,10 @@ def handle_imp(args, client: QuestDBClient):
             logger.info(f"--- Processing file {i + 1}/{num_files}: '{file_path}' ---")
 
             # --- Determine Table Name ---
-            table_name = args.name
-            if not table_name:
+            final_table_name = args.name  # Start with explicitly provided name
+
+            if not final_table_name:  # Only derive if --name was not provided
+                derived_table_name = None
                 if args.name_func:
                     name_func_choice = args.name_func
                     if name_func_choice in TABLE_NAME_FUNCTIONS:
@@ -245,9 +247,9 @@ def handle_imp(args, client: QuestDBClient):
                                 args.name_func_prefix or ""
                             )  # Pass empty string if None
                         try:
-                            table_name = func(file_path, **func_kwargs)
+                            derived_table_name = func(file_path, **func_kwargs)
                             logger.info(
-                                f"Using name function '{name_func_choice}' -> table name: '{table_name}'"
+                                f"Using name function '{name_func_choice}' -> derived name: '{derived_table_name}'"
                             )
                         except Exception as e:
                             logger.error(
@@ -257,7 +259,7 @@ def handle_imp(args, client: QuestDBClient):
                             if args.stop_on_error:
                                 sys.exit(1)
                             else:
-                                continue
+                                continue  # Skip this file
                     else:
                         logger.error(
                             f"Internal error: Unknown name function '{name_func_choice}'."
@@ -266,26 +268,55 @@ def handle_imp(args, client: QuestDBClient):
                         if args.stop_on_error:
                             sys.exit(1)
                         else:
-                            continue
+                            continue # Skip this file
                 else:
-                    table_name = get_table_name_from_stem(file_path)
+                    # Default: use file stem
+                    derived_table_name = get_table_name_from_stem(file_path)
                     logger.info(
-                        f"Using default naming (file stem) -> table name: '{table_name}'"
+                        f"Using default naming (file stem) -> derived name: '{derived_table_name}'"
                     )
 
-            if not table_name:
+                if not derived_table_name:
+                    logger.error(
+                        f"Could not derive table name for file '{file_path}'. Skipping."
+                    )
+                    any_file_failed = True
+                    if args.stop_on_error:
+                        sys.exit(1)
+                    else:
+                        continue # Skip this file
+
+                final_table_name = derived_table_name # Assign derived name as the final name for now
+
+                # --- Apply dash-to-underscore conversion if requested ---
+                if args.dash_to_underscore:
+                    original_derived_name = final_table_name
+                    final_table_name = final_table_name.replace('-', '_')
+                    if original_derived_name != final_table_name:
+                        logger.info(f"Applied dash-to-underscore: '{original_derived_name}' -> '{final_table_name}'")
+                    else:
+                        logger.debug(f"Dash-to-underscore requested, but derived name '{final_table_name}' contains no dashes.")
+
+            else: # --name was explicitly provided
+                 logger.info(f"Using explicitly provided table name: '{final_table_name}'")
+                 if args.dash_to_underscore:
+                     logger.warning("Ignoring --dash-to-underscore because explicit --name was provided.")
+
+
+            # --- Final check on table name validity ---
+            if not final_table_name:
                 logger.error(
-                    f"Could not determine table name for file '{file_path}'. Skipping."
+                    f"Could not determine final table name for file '{file_path}'. Skipping."
                 )
                 any_file_failed = True
                 if args.stop_on_error:
                     sys.exit(1)
                 else:
-                    continue
+                    continue # Skip this file
 
             # --- Dry Run Check ---
             if args.dry_run:
-                simulate_imp(args, file_path, table_name, schema_source_desc)
+                simulate_imp(args, file_path, final_table_name, schema_source_desc)
                 # Add separator if not the first file and json format
                 if i > 0 and args.fmt == "json":
                     sys.stdout.write(json_separator)
@@ -297,14 +328,14 @@ def handle_imp(args, client: QuestDBClient):
                 # Open data file just before the request
                 data_file_obj_for_request = open(file_path, "rb")
 
-                logger.info(f"Importing '{file_path}' into table '{table_name}'...")
+                logger.info(f"Importing '{file_path}' into table '{final_table_name}'...")
 
                 response = client.imp(
                     data_file_obj=data_file_obj_for_request,
                     data_file_name=file_path.name,  # Pass filename explicitly
                     schema_json_str=schema_content,  # Pass prepared schema string
                     schema_file_obj=schema_file_obj,  # Pass prepared schema file obj
-                    table_name=table_name,
+                    table_name=final_table_name, # Use the final calculated name
                     partition_by=args.partitionBy,
                     timestamp_col=args.timestamp,
                     overwrite=args.overwrite,
@@ -1038,13 +1069,13 @@ def main():
     )
     log_level_group = parser.add_mutually_exclusive_group()
     log_level_group.add_argument(
-        "-i",
+        "-i", # Changed from -v to -i for INFO
         "--info",
         action="store_true",
-        help="Use warning level logging (default is WARNING).",
+        help="Use info level logging (default is WARNING).",
     )
     log_level_group.add_argument(
-        "-D",
+        "-D", # Global Debug flag - MUST NOT clash with subcommand flags
         "--debug",
         action="store_true",
         help="Enable debug level logging to stderr.",
@@ -1092,7 +1123,7 @@ def main():
     parser_imp.add_argument(
         "-n",
         "--name",
-        help="Explicit table name. Overrides --name-func. Applied to ALL files.",
+        help="Explicit table name. Overrides --name-func and --dash-to-underscore. Applied to ALL files.",
     )
     parser_imp.add_argument(
         "--name-func",
@@ -1105,6 +1136,16 @@ def main():
         help="Prefix string for 'add_prefix' name function.",
         default="",
     )  # Default to empty string
+
+    # --- NEW dash-to-underscore flag for imp ---
+    # Note: Using long form only to avoid conflict with global -D (--debug)
+    parser_imp.add_argument(
+        "--dash-to-underscore",
+        action="store_true",
+        help="If table name is derived from filename (i.e., --name not set), convert dashes (-) to underscores (_). Compatible with --name-func.",
+    )
+    # --- End new flag ---
+
     schema_group = parser_imp.add_mutually_exclusive_group()
     schema_group.add_argument(
         "--schema-file", help="Path to JSON schema file. Applied to ALL files."
@@ -1374,8 +1415,19 @@ def main():
 
     # Also set level for the CLI's own logger if needed for specific CLI messages
     logger.setLevel(log_level)
+    # Configure logging for the questdb_rest library as well
+    library_logger = logging.getLogger('questdb_rest')
+    library_logger.setLevel(log_level)
+    # Ensure library logs go to stderr if handler not already present
+    if not library_logger.hasHandlers():
+         handler = logging.StreamHandler(sys.stderr)
+         formatter = logging.Formatter('%(name)s %(levelname)s: %(message)s') # Simpler format for library
+         handler.setFormatter(formatter)
+         library_logger.addHandler(handler)
+
+
     if log_level == logging.DEBUG:
-        logger.debug("Debug logging enabled.")
+        logger.debug("Debug logging enabled for CLI and library.")
 
     # --- Handle Password Prompting ---
     # This needs to happen *before* client initialization, but *after* parsing args
@@ -1431,6 +1483,11 @@ def main():
             logger.warning(
                 "Both --name and --name-func provided. Explicit --name will be used."
             )
+        # Add warning if --dash-to-underscore is used with explicit --name
+        if args.name and args.dash_to_underscore:
+             # This warning is now also handled inside handle_imp for clarity per file
+             pass
+
 
     # --- Instantiate Client (if needed and not dry run) ---
     client = None
@@ -1450,48 +1507,35 @@ def main():
             if args.config:
                 # If a specific config file is given via --config, use from_config_file
                 # We prioritize command-line args over the config file if both are present.
-                # The current client logic prioritizes args over default config (~/.questdb-rest/config.json)
-                # but from_config_file *only* uses the specified file.
-                # Let's stick to the standard constructor which handles merging:
-                # command-line > ~/.questdb-rest/config.json > defaults
-                # If --config is specified, maybe it should *override* ~/.questdb-rest?
-                # Current QuestDBClient init loads default config *then* overrides with args.
-                # Let's modify the client or create a helper to load a specific config *then* apply args.
-                # Simpler approach: Stick to default init which handles ~/.questdb-rest/config.json
-                # and let command-line args override everything.
-                # If user *really* wants --config to take precedence, they should avoid setting conflicting CLI args.
-                logger.debug(
-                    f"Initializing client with explicit config file: {args.config}"
-                )
-                # Option 1: Use existing logic (CLI args > default config > defaults)
-                # client = QuestDBClient(**filtered_kwargs) # Default handles ~/.questdb-rest
-
-                # Option 2: Prioritize explicit --config file
+                # Let's use from_config_file first, then override with CLI args.
                 try:
                     logger.info(
                         f"Loading configuration from specified file: {args.config}"
                     )
-                    client = QuestDBClient.from_config_file(args.config)
-                    # Now, override with any non-None CLI args
-                    if args.host is not None:
-                        client.base_url = f"{client.base_url.split('://')[0]}://{args.host}:{client.base_url.split(':')[-1].split('/')[0]}/"
-                    if args.port is not None:
-                        client.base_url = f"{client.base_url.split('://')[0]}://{client.base_url.split('://')[1].split(':')[0]}:{args.port}/"
-                    if args.user is not None:
-                        client.auth = (
-                            (args.user, actual_password) if args.user else None
-                        )
-                    elif client.auth and args.password is not None:
-                        client.auth = (
-                            client.auth[0],
-                            actual_password,
-                        )  # Update only password if user from config
-                    if args.timeout is not None:
-                        client.timeout = args.timeout
-                    if args.scheme is not None:
-                        client.base_url = (
-                            f"{args.scheme}://{client.base_url.split('://')[1]}"
-                        )
+                    # Load base settings from the specified config file
+                    base_client = QuestDBClient.from_config_file(args.config)
+
+                    # Prepare overrides from CLI args (only if they were actually provided)
+                    cli_overrides = {}
+                    if args.host is not None: cli_overrides['host'] = args.host
+                    if args.port is not None: cli_overrides['port'] = args.port
+                    if args.user is not None: cli_overrides['user'] = args.user
+                    # Use actual_password which includes prompted/cli password if applicable
+                    if args.user is not None or args.password is not None:
+                        cli_overrides['password'] = actual_password
+                    if args.timeout is not None: cli_overrides['timeout'] = args.timeout
+                    if args.scheme is not None: cli_overrides['scheme'] = args.scheme
+
+                    # Update the base client settings with CLI overrides
+                    final_kwargs = {
+                        'host': cli_overrides.get('host', base_client.base_url.split('://')[1].split(':')[0]),
+                        'port': cli_overrides.get('port', int(base_client.base_url.split(':')[-1].split('/')[0])),
+                        'user': cli_overrides.get('user', base_client.auth[0] if base_client.auth else None),
+                        'password': cli_overrides.get('password', base_client.auth[1] if base_client.auth else None),
+                        'timeout': cli_overrides.get('timeout', base_client.timeout),
+                        'scheme': cli_overrides.get('scheme', base_client.base_url.split('://')[0]),
+                    }
+                    client = QuestDBClient(**final_kwargs)
                     logger.debug(
                         f"Client initialized from {args.config} and updated with CLI args."
                     )
