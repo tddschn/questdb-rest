@@ -17,6 +17,7 @@ The REST API is very well defined: https://questdb.com/docs/reference/api/rest/,
     - [Configuring CLI - DB connection options](#configuring-cli---db-connection-options)
   - [PyPI packages and installation](#pypi-packages-and-installation)
   - [The Python API](#the-python-api)
+  - [Screenshots](#screenshots)
 
 
 ## Features beyond what the vanilla REST API provides
@@ -162,3 +163,10 @@ QuestDBConnectionError
 QuestDBAPIError
 QuestDBClient
 ```
+
+## Screenshots
+
+![CleanShot-2025-03-30-16.25.07](https://g.teddysc.me/tddschn/16651cccc351b1d2742a4bddaee1c62d/CleanShot-2025-03-30-16.25.07@2x_base64.txt?b)
+![CleanShot-2025-03-30-16.32.44](https://g.teddysc.me/tddschn/16651cccc351b1d2742a4bddaee1c62d/CleanShot-2025-03-30-16.32.44_base64.txt?b)
+![CleanShot-2025-03-30-16.33.18](https://g.teddysc.me/tddschn/16651cccc351b1d2742a4bddaee1c62d/CleanShot-2025-03-30-16.33.18_base64.txt?b)
+![CleanShot-2025-03-30-16.33.36](https://g.teddysc.me/tddschn/16651cccc351b1d2742a4bddaee1c62d/CleanShot-2025-03-30-16.33.36_base64.txt?b)
