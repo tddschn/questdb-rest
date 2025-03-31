@@ -101,6 +101,21 @@ options:
 
 Convenience command to fetch schema for 1 or more tables. Hard to do without reading good chunk of the QuestDB doc. The web console supports copying schemas from the tables list.
 
+```
+qdb-cli schema equities_1d
+
+CREATE TABLE 'equities_1d' ( 
+	timestamp TIMESTAMP,
+	open DOUBLE,
+	high DOUBLE,
+	low DOUBLE,
+	close DOUBLE,
+	volume LONG,
+	ticker SYMBOL CAPACITY 1024 CACHE
+) timestamp(timestamp) PARTITION BY YEAR WAL
+WITH maxUncommittedRows=500000, o3MaxLag=600000000us
+DEDUP UPSERT KEYS(timestamp,ticker);
+```
 ### `chk`
 
 The `chk` command to talk to `/chk` endpoint, which is used by the web console's CSV upload UI.
