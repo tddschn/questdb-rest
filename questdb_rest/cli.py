@@ -1,4 +1,3 @@
-# --- START OF MODIFIED cli.py ---
 #!/usr/bin/env python3
 
 
@@ -1628,4 +1627,3 @@ if __name__ == "__main__":
         logger.exception(f"An unexpected error occurred at the top level: {e}")
         sys.exit(1)
 
-# --- END OF MODIFIED cli.py ---
