@@ -24,7 +24,7 @@ The REST API is very well defined: https://questdb.com/docs/reference/api/rest/,
 
 Originally I just wrote the CLI (`cli.py`), then it becomes really complicated that I had to split the code and put the REST API interfacing part into a module (`__init__.py`).
 
-- https://teddysc.me/blog/questdb-rest
+- Write up and demo: https://teddysc.me/blog/questdb-rest
 - https://teddysc.me/blog/rlwrap-questdb-shell
 - GitHub: https://github.com/tddschn/questdb-rest
 - PyPI: https://pypi.org/project/questdb-rest/
