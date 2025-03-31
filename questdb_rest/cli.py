@@ -268,7 +268,7 @@ def handle_imp(args, client: QuestDBClient):
                         if args.stop_on_error:
                             sys.exit(1)
                         else:
-                            continue # Skip this file
+                            continue  # Skip this file
                 else:
                     # Default: use file stem
                     derived_table_name = get_table_name_from_stem(file_path)
@@ -284,24 +284,33 @@ def handle_imp(args, client: QuestDBClient):
                     if args.stop_on_error:
                         sys.exit(1)
                     else:
-                        continue # Skip this file
+                        continue  # Skip this file
 
-                final_table_name = derived_table_name # Assign derived name as the final name for now
+                final_table_name = (
+                    derived_table_name  # Assign derived name as the final name for now
+                )
 
                 # --- Apply dash-to-underscore conversion if requested ---
                 if args.dash_to_underscore:
                     original_derived_name = final_table_name
-                    final_table_name = final_table_name.replace('-', '_')
+                    final_table_name = final_table_name.replace("-", "_")
                     if original_derived_name != final_table_name:
-                        logger.info(f"Applied dash-to-underscore: '{original_derived_name}' -> '{final_table_name}'")
+                        logger.info(
+                            f"Applied dash-to-underscore: '{original_derived_name}' -> '{final_table_name}'"
+                        )
                     else:
-                        logger.debug(f"Dash-to-underscore requested, but derived name '{final_table_name}' contains no dashes.")
+                        logger.debug(
+                            f"Dash-to-underscore requested, but derived name '{final_table_name}' contains no dashes."
+                        )
 
-            else: # --name was explicitly provided
-                 logger.info(f"Using explicitly provided table name: '{final_table_name}'")
-                 if args.dash_to_underscore:
-                     logger.warning("Ignoring --dash-to-underscore because explicit --name was provided.")
-
+            else:  # --name was explicitly provided
+                logger.info(
+                    f"Using explicitly provided table name: '{final_table_name}'"
+                )
+                if args.dash_to_underscore:
+                    logger.warning(
+                        "Ignoring --dash-to-underscore because explicit --name was provided."
+                    )
 
             # --- Final check on table name validity ---
             if not final_table_name:
@@ -312,7 +321,7 @@ def handle_imp(args, client: QuestDBClient):
                 if args.stop_on_error:
                     sys.exit(1)
                 else:
-                    continue # Skip this file
+                    continue  # Skip this file
 
             # --- Dry Run Check ---
             if args.dry_run:
@@ -328,14 +337,16 @@ def handle_imp(args, client: QuestDBClient):
                 # Open data file just before the request
                 data_file_obj_for_request = open(file_path, "rb")
 
-                logger.info(f"Importing '{file_path}' into table '{final_table_name}'...")
+                logger.info(
+                    f"Importing '{file_path}' into table '{final_table_name}'..."
+                )
 
                 response = client.imp(
                     data_file_obj=data_file_obj_for_request,
                     data_file_name=file_path.name,  # Pass filename explicitly
                     schema_json_str=schema_content,  # Pass prepared schema string
                     schema_file_obj=schema_file_obj,  # Pass prepared schema file obj
-                    table_name=final_table_name, # Use the final calculated name
+                    table_name=final_table_name,  # Use the final calculated name
                     partition_by=args.partitionBy,
                     timestamp_col=args.timestamp,
                     overwrite=args.overwrite,
@@ -1069,13 +1080,13 @@ def main():
     )
     log_level_group = parser.add_mutually_exclusive_group()
     log_level_group.add_argument(
-        "-i", # Changed from -v to -i for INFO
+        "-i",  # Changed from -v to -i for INFO
         "--info",
         action="store_true",
         help="Use info level logging (default is WARNING).",
     )
     log_level_group.add_argument(
-        "-D", # Global Debug flag - MUST NOT clash with subcommand flags
+        "-D",  # Global Debug flag - MUST NOT clash with subcommand flags
         "--debug",
         action="store_true",
         help="Enable debug level logging to stderr.",
@@ -1140,6 +1151,7 @@ def main():
     # --- NEW dash-to-underscore flag for imp ---
     # Note: Using long form only to avoid conflict with global -D (--debug)
     parser_imp.add_argument(
+        "-D",
         "--dash-to-underscore",
         action="store_true",
         help="If table name is derived from filename (i.e., --name not set), convert dashes (-) to underscores (_). Compatible with --name-func.",
@@ -1416,15 +1428,16 @@ def main():
     # Also set level for the CLI's own logger if needed for specific CLI messages
     logger.setLevel(log_level)
     # Configure logging for the questdb_rest library as well
-    library_logger = logging.getLogger('questdb_rest')
+    library_logger = logging.getLogger("questdb_rest")
     library_logger.setLevel(log_level)
     # Ensure library logs go to stderr if handler not already present
     if not library_logger.hasHandlers():
-         handler = logging.StreamHandler(sys.stderr)
-         formatter = logging.Formatter('%(name)s %(levelname)s: %(message)s') # Simpler format for library
-         handler.setFormatter(formatter)
-         library_logger.addHandler(handler)
-
+        handler = logging.StreamHandler(sys.stderr)
+        formatter = logging.Formatter(
+            "%(name)s %(levelname)s: %(message)s"
+        )  # Simpler format for library
+        handler.setFormatter(formatter)
+        library_logger.addHandler(handler)
 
     if log_level == logging.DEBUG:
         logger.debug("Debug logging enabled for CLI and library.")
@@ -1485,9 +1498,8 @@ def main():
             )
         # Add warning if --dash-to-underscore is used with explicit --name
         if args.name and args.dash_to_underscore:
-             # This warning is now also handled inside handle_imp for clarity per file
-             pass
-
+            # This warning is now also handled inside handle_imp for clarity per file
+            pass
 
     # --- Instantiate Client (if needed and not dry run) ---
     client = None
@@ -1517,23 +1529,40 @@ def main():
 
                     # Prepare overrides from CLI args (only if they were actually provided)
                     cli_overrides = {}
-                    if args.host is not None: cli_overrides['host'] = args.host
-                    if args.port is not None: cli_overrides['port'] = args.port
-                    if args.user is not None: cli_overrides['user'] = args.user
+                    if args.host is not None:
+                        cli_overrides["host"] = args.host
+                    if args.port is not None:
+                        cli_overrides["port"] = args.port
+                    if args.user is not None:
+                        cli_overrides["user"] = args.user
                     # Use actual_password which includes prompted/cli password if applicable
                     if args.user is not None or args.password is not None:
-                        cli_overrides['password'] = actual_password
-                    if args.timeout is not None: cli_overrides['timeout'] = args.timeout
-                    if args.scheme is not None: cli_overrides['scheme'] = args.scheme
+                        cli_overrides["password"] = actual_password
+                    if args.timeout is not None:
+                        cli_overrides["timeout"] = args.timeout
+                    if args.scheme is not None:
+                        cli_overrides["scheme"] = args.scheme
 
                     # Update the base client settings with CLI overrides
                     final_kwargs = {
-                        'host': cli_overrides.get('host', base_client.base_url.split('://')[1].split(':')[0]),
-                        'port': cli_overrides.get('port', int(base_client.base_url.split(':')[-1].split('/')[0])),
-                        'user': cli_overrides.get('user', base_client.auth[0] if base_client.auth else None),
-                        'password': cli_overrides.get('password', base_client.auth[1] if base_client.auth else None),
-                        'timeout': cli_overrides.get('timeout', base_client.timeout),
-                        'scheme': cli_overrides.get('scheme', base_client.base_url.split('://')[0]),
+                        "host": cli_overrides.get(
+                            "host", base_client.base_url.split("://")[1].split(":")[0]
+                        ),
+                        "port": cli_overrides.get(
+                            "port",
+                            int(base_client.base_url.split(":")[-1].split("/")[0]),
+                        ),
+                        "user": cli_overrides.get(
+                            "user", base_client.auth[0] if base_client.auth else None
+                        ),
+                        "password": cli_overrides.get(
+                            "password",
+                            base_client.auth[1] if base_client.auth else None,
+                        ),
+                        "timeout": cli_overrides.get("timeout", base_client.timeout),
+                        "scheme": cli_overrides.get(
+                            "scheme", base_client.base_url.split("://")[0]
+                        ),
                     }
                     client = QuestDBClient(**final_kwargs)
                     logger.debug(
