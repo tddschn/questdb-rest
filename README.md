@@ -31,6 +31,7 @@ Originally I just wrote the CLI (`cli.py`), then it becomes really complicated t
 - https://teddysc.me/blog/rlwrap-questdb-shell
 - GitHub: https://github.com/tddschn/questdb-rest
 - PyPI: https://pypi.org/project/questdb-rest/
+- QuestDB-Shell: https://github.com/tddschn/questdb-shell
 
 ### `imp` programmatically derives table name from filename when uploading CSVs
 
