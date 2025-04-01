@@ -5,6 +5,7 @@
 The REST API is very well defined: https://questdb.com/docs/reference/api/rest/, only 3 documented endpoints. One undocumented endpoints I also implemented are `/chk` to check for if a table exists, I found the route when trying to ingest CSV via the web console.
 
 - [QuestDB REST API Python Client, CLI and REPL Shell](#questdb-rest-api-python-client-cli-and-repl-shell)
+  - [How's this different from the official `py-questdb-client` and `py-questdb-query` packages?](#hows-this-different-from-the-official-py-questdb-client-and-py-questdb-query-packages)
   - [Features beyond what the vanilla REST API provides](#features-beyond-what-the-vanilla-rest-api-provides)
     - [Docs, screenshots and video demos](#docs-screenshots-and-video-demos)
     - [`imp` programmatically derives table name from filename when uploading CSVs](#imp-programmatically-derives-table-name-from-filename-when-uploading-csvs)
@@ -19,6 +20,11 @@ The REST API is very well defined: https://questdb.com/docs/reference/api/rest/,
   - [The Python API](#the-python-api)
   - [Screenshots](#screenshots)
 
+## How's this different from the official `py-questdb-client` and `py-questdb-query` packages?
+
+- `py-questdb-client`: Focuses on ingestion from Python data structures and / or DataFrames, I don't think it does anything else
+- `py-questdb-query`: Cython based library to get numpy arrays or dataframes from the REST API
+- This python client: Gets raw JSON from REST API, doesn't depend on numpy or pandas, making the CLI lightweight and fast to start
 
 ## Features beyond what the vanilla REST API provides
 
