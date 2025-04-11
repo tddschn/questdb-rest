@@ -15,6 +15,8 @@
 # ///
 
 import argparse
+import html
+from typing import Any, Dict
 import sys
 import json
 import logging
@@ -551,6 +553,9 @@ def handle_exec(args, client: QuestDBClient):
     first_output_written = False
     for i, statement in enumerate(statements):
         logger.info(f"Executing statement {i + 1}/{len(statements)}...")
+        if args.explain_only:
+            if not statement.lower().startswith("explain"):
+                statement = f"EXPLAIN {statement}"
         logger.debug(
             f"Statement: {statement[:100]}{'...' if len(statement) > 100 else ''}"
         )
@@ -601,7 +606,11 @@ def handle_exec(args, client: QuestDBClient):
 
             # --- Handle Output Formatting ---
             output_written_this_statement = False
-            if args.one:
+            if args.explain_only:
+                if isinstance(response_json, dict) and "dataset" in response_json:
+                    explain_text = explain_output_to_text(response_json)
+                    sys.stdout.write(explain_text + "\n")
+            elif args.one:
                 if isinstance(response_json, dict) and "dataset" in response_json:
                     if (
                         len(response_json["dataset"]) > 0
@@ -836,6 +845,12 @@ def handle_chk(args, client: QuestDBClient):
     except KeyboardInterrupt:
         logger.info("\nOperation cancelled by user.")
         sys.exit(130)
+
+
+def explain_output_to_text(data: Dict[str, Any]) -> str:
+    """Convert query plan dict to plain text output."""
+    lines = [html.unescape(row[0]) for row in data.get("dataset", [])]
+    return "\n".join(lines)
 
 
 # --- NEW: handle_schema ---
@@ -1294,6 +1309,11 @@ def main():
         type=int,
         help="Query timeout in milliseconds (per statement).",
     )
+    parser_exec.add_argument(
+        "--explain-only",
+        action="store_true",
+        help="Only show the execution plan for the query(s), not the results. Will prefix EXPLAIN to the query(s) if not already present.",
+    )
     # --stop-on-error is now global
     # Output formatting options
     exec_format_group = parser_exec.add_mutually_exclusive_group()
@@ -1626,4 +1646,3 @@ if __name__ == "__main__":
         # Final fallback
         logger.exception(f"An unexpected error occurred at the top level: {e}")
         sys.exit(1)
-
