@@ -1313,17 +1313,18 @@ def main():
         type=int,
         help="Query timeout in milliseconds (per statement).",
     )
-    parser_exec.add_argument(
+    group_query_modifier = parser_exec.add_argument_group("Query Modifier Options")
+    group_query_modifier.add_argument(
         "--explain-only",
         action="store_true",
         help="Only show the execution plan for the query(s), not the results. Will prefix EXPLAIN to the query(s) if not already present.",
     )
-    parser_exec.add_argument(
+    group_query_modifier.add_argument(
         "--create-table",
         action="store_true",
         help="Create a new table from the query result(s).",
     )
-    parser_exec.add_argument(
+    group_query_modifier.add_argument(
         "--new-table-name",
         help="Name of the new table to create from query result(s). Required if --create-table is used.",
     )
