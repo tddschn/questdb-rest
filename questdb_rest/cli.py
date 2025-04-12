@@ -556,6 +556,10 @@ def handle_exec(args, client: QuestDBClient):
         if args.explain_only:
             if not statement.lower().startswith("explain"):
                 statement = f"EXPLAIN {statement}"
+        elif args.create_table:
+            new_table_name = args.new_table_name
+            assert new_table_name, "New table name must be provided for --create-table"
+            statement = f"CREATE TABLE {new_table_name} AS ({statement})"
         logger.debug(
             f"Statement: {statement[:100]}{'...' if len(statement) > 100 else ''}"
         )
@@ -1313,6 +1317,15 @@ def main():
         "--explain-only",
         action="store_true",
         help="Only show the execution plan for the query(s), not the results. Will prefix EXPLAIN to the query(s) if not already present.",
+    )
+    parser_exec.add_argument(
+        "--create-table",
+        action="store_true",
+        help="Create a new table from the query result(s).",
+    )
+    parser_exec.add_argument(
+        "--new-table-name",
+        help="Name of the new table to create from query result(s). Required if --create-table is used.",
     )
     # --stop-on-error is now global
     # Output formatting options
