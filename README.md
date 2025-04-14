@@ -7,7 +7,7 @@ The REST API is very well defined: https://questdb.com/docs/reference/api/rest/,
 ```
 # << a short tour of questdb-cli >>
 
-# querying the public demo instance
+# querying the public demo instance, print the data in psql table format
 $ qdb-cli --port 443 --host https://demo.questdb.io exec --psql -q 'trades limit 20'
 
 +----------+--------+----------+------------+-----------------------------+
