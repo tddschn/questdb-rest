@@ -5,6 +5,8 @@
 The REST API is very well defined: https://questdb.com/docs/reference/api/rest/, only 3 documented endpoints. One undocumented endpoints I also implemented are `/chk` to check for if a table exists, I found the route when trying to ingest CSV via the web console.
 
 ```
+# << a short tour of questdb-cli >>
+
 # querying the public demo instance
 $ qdb-cli --port 443 --host https://demo.questdb.io exec --psql -q 'trades limit 20'
 
