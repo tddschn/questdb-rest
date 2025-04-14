@@ -36,7 +36,7 @@ $ qdb-cli --port 443 --host https://demo.questdb.io exec --psql -q 'trades limit
 +----------+--------+----------+------------+-----------------------------+
 
 
-# export the whole table
+# export the whole table (180 MB, be careful)
 $ qdb-cli --port 443 --host https://demo.questdb.io exp 'trips' > trips.csv
 ```
 
