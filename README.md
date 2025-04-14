@@ -32,6 +32,10 @@ $ qdb-cli --port 443 --host https://demo.questdb.io exec --psql -q 'trades limit
 | ETH-USD  | buy    |  2615.62 | 0.00044    | 2022-03-08T18:03:58.682070Z |
 | ETH-USD  | buy    |  2615.62 | 0.00044    | 2022-03-08T18:03:58.682070Z |
 +----------+--------+----------+------------+-----------------------------+
+
+
+# export the whole table
+$ qdb-cli --port 443 --host https://demo.questdb.io exp 'trips' > trips.csv
 ```
 
 - [QuestDB REST API Python Client, CLI and REPL Shell](#questdb-rest-api-python-client-cli-and-repl-shell)
