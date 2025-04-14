@@ -1046,6 +1046,22 @@ def handle_gen_config(args, client: Any = None):
     sys.exit(0)
 
 
+def detect_scheme_in_host(host_str):
+    """
+    Detect if the host string already includes a URL scheme (http:// or https://).
+    Returns a tuple of (scheme, actual_host) if scheme is detected, or (None, host_str) if not.
+    """
+    if not host_str:
+        return None, host_str
+
+    if host_str.startswith("http://"):
+        return "http", host_str[7:]  # Remove "http://" prefix
+    elif host_str.startswith("https://"):
+        return "https", host_str[8:]  # Remove "https://" prefix
+
+    return None, host_str  # No scheme detected in host string
+
+
 # --- Main Execution ---
 def main():
     parser = argparse.ArgumentParser(
@@ -1538,8 +1554,21 @@ def main():
     client = None
     if args.requires_client and not args.dry_run:
         try:
+            # Check if host already contains a scheme
+            detected_scheme = None
+            actual_host = args.host
+            if args.host:
+                detected_scheme, actual_host = detect_scheme_in_host(args.host)
+                if detected_scheme:
+                    logger.debug(
+                        f"Detected scheme '{detected_scheme}://' in host parameter: '{args.host}'"
+                    )
+                    # Override scheme if detected in host, unless explicitly provided via --scheme
+                    if not args.scheme:
+                        args.scheme = detected_scheme
+
             client_kwargs = {
-                "host": args.host,
+                "host": actual_host,  # Use the host without scheme
                 "port": args.port,
                 "user": args.user,
                 "password": actual_password,  # Use potentially prompted/config password

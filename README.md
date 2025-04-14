@@ -4,6 +4,36 @@
 
 The REST API is very well defined: https://questdb.com/docs/reference/api/rest/, only 3 documented endpoints. One undocumented endpoints I also implemented are `/chk` to check for if a table exists, I found the route when trying to ingest CSV via the web console.
 
+```
+# querying the public demo instance
+$ qdb-cli --port 443 --host https://demo.questdb.io exec --psql -q 'trades limit 20'
+
++----------+--------+----------+------------+-----------------------------+
+| symbol   | side   |    price |     amount | timestamp                   |
+|----------+--------+----------+------------+-----------------------------|
+| ETH-USD  | sell   |  2615.54 | 0.00044    | 2022-03-08T18:03:57.609765Z |
+| BTC-USD  | sell   | 39270    | 0.001      | 2022-03-08T18:03:57.710419Z |
+| ETH-USD  | buy    |  2615.4  | 0.002      | 2022-03-08T18:03:57.764098Z |
+| ETH-USD  | buy    |  2615.4  | 0.001      | 2022-03-08T18:03:57.764098Z |
+| ETH-USD  | buy    |  2615.4  | 0.00042698 | 2022-03-08T18:03:57.764098Z |
+| ETH-USD  | buy    |  2615.36 | 0.025936   | 2022-03-08T18:03:58.194582Z |
+| ETH-USD  | buy    |  2615.37 | 0.0350084  | 2022-03-08T18:03:58.194582Z |
+| ETH-USD  | buy    |  2615.46 | 0.172602   | 2022-03-08T18:03:58.194582Z |
+| ETH-USD  | buy    |  2615.47 | 0.14811    | 2022-03-08T18:03:58.194582Z |
+| BTC-USD  | sell   | 39265.3  | 0.000127   | 2022-03-08T18:03:58.357448Z |
+| BTC-USD  | sell   | 39265.3  | 0.000245   | 2022-03-08T18:03:58.357448Z |
+| BTC-USD  | sell   | 39265.3  | 7.3e-05    | 2022-03-08T18:03:58.357448Z |
+| BTC-USD  | sell   | 39263.3  | 0.00392897 | 2022-03-08T18:03:58.357448Z |
+| ETH-USD  | buy    |  2615.35 | 0.0224587  | 2022-03-08T18:03:58.612275Z |
+| ETH-USD  | buy    |  2615.36 | 0.0324461  | 2022-03-08T18:03:58.612275Z |
+| BTC-USD  | sell   | 39265.3  | 6.847e-05  | 2022-03-08T18:03:58.660121Z |
+| BTC-USD  | sell   | 39262.4  | 0.00046562 | 2022-03-08T18:03:58.660121Z |
+| ETH-USD  | buy    |  2615.62 | 0.00044    | 2022-03-08T18:03:58.682070Z |
+| ETH-USD  | buy    |  2615.62 | 0.00044    | 2022-03-08T18:03:58.682070Z |
+| ETH-USD  | buy    |  2615.62 | 0.00044    | 2022-03-08T18:03:58.682070Z |
++----------+--------+----------+------------+-----------------------------+
+```
+
 - [QuestDB REST API Python Client, CLI and REPL Shell](#questdb-rest-api-python-client-cli-and-repl-shell)
   - [How's this different from the official `py-questdb-client` and `py-questdb-query` packages?](#hows-this-different-from-the-official-py-questdb-client-and-py-questdb-query-packages)
   - [Features beyond what the vanilla REST API provides](#features-beyond-what-the-vanilla-rest-api-provides)
