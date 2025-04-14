@@ -38,6 +38,14 @@ $ qdb-cli --port 443 --host https://demo.questdb.io exec --psql -q 'trades limit
 
 # export the whole table (180 MB, be careful)
 $ qdb-cli --port 443 --host https://demo.questdb.io exp 'trips' > trips.csv
+
+# import the copy in your local instance
+# let's configure the CLI to use your local instance first
+$ qdb-cli gen-config
+# edit the config file to set your local instance
+
+# lightning fast import!
+$ qdb-cli imp --name trips trips.csv
 ```
 
 - [QuestDB REST API Python Client, CLI and REPL Shell](#questdb-rest-api-python-client-cli-and-repl-shell)
