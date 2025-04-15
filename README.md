@@ -82,6 +82,36 @@ $ qdb-cli imp --name trips trips.csv --partitionBy WEEK --timestamp pickup_datet
 |             22  |                                pickup_location_id  |                      INT  |           0  |
 |             23  |                               dropoff_location_id  |                      INT  |           0  |
 +-----------------------------------------------------------------------------------------------------------------+
+
+# check schema to confirm the import
+$ qdb-cli schema trips
+CREATE TABLE 'trips' ( 
+	cab_type VARCHAR,
+	vendor_id VARCHAR,
+	pickup_datetime TIMESTAMP,
+	dropoff_datetime TIMESTAMP,
+	rate_code_id VARCHAR,
+	pickup_latitude DOUBLE,
+	pickup_longitude DOUBLE,
+	dropoff_latitude DOUBLE,
+	dropoff_longitude DOUBLE,
+	passenger_count INT,
+	trip_distance DOUBLE,
+	fare_amount DOUBLE,
+	extra DOUBLE,
+	mta_tax DOUBLE,
+	tip_amount DOUBLE,
+	tolls_amount DOUBLE,
+	ehail_fee DOUBLE,
+	improvement_surcharge DOUBLE,
+	congestion_surcharge DOUBLE,
+	total_amount DOUBLE,
+	payment_type VARCHAR,
+	trip_type VARCHAR,
+	pickup_location_id INT,
+	dropoff_location_id INT
+) timestamp(pickup_datetime) PARTITION BY WEEK WAL
+WITH maxUncommittedRows=500000, o3MaxLag=600000000us;
 ```
 
 ## Table of Contents
