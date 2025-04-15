@@ -46,6 +46,39 @@ $ qdb-cli gen-config
 
 # lightning fast import!
 $ qdb-cli imp --name trips trips.csv
++-----------------------------------------------------------------------------------------------------------------+
+|      Location:  |                                             trips  |        Pattern  | Locale  |      Errors  |
+|   Partition by  |                                              NONE  |                 |         |              |
+|      Timestamp  |                                              NONE  |                 |         |              |
++-----------------------------------------------------------------------------------------------------------------+
+|   Rows handled  |                                           1000000  |                 |         |              |
+|  Rows imported  |                                           1000000  |                 |         |              |
++-----------------------------------------------------------------------------------------------------------------+
+|              0  |                                          cab_type  |                  VARCHAR  |           0  |
+|              1  |                                         vendor_id  |                  VARCHAR  |           0  |
+|              2  |                                   pickup_datetime  |                TIMESTAMP  |           0  |
+|              3  |                                  dropoff_datetime  |                TIMESTAMP  |           0  |
+|              4  |                                      rate_code_id  |                  VARCHAR  |           0  |
+|              5  |                                   pickup_latitude  |                   DOUBLE  |           0  |
+|              6  |                                  pickup_longitude  |                   DOUBLE  |           0  |
+|              7  |                                  dropoff_latitude  |                   DOUBLE  |           0  |
+|              8  |                                 dropoff_longitude  |                   DOUBLE  |           0  |
+|              9  |                                   passenger_count  |                      INT  |           0  |
+|             10  |                                     trip_distance  |                   DOUBLE  |           0  |
+|             11  |                                       fare_amount  |                   DOUBLE  |           0  |
+|             12  |                                             extra  |                   DOUBLE  |           0  |
+|             13  |                                           mta_tax  |                   DOUBLE  |           0  |
+|             14  |                                        tip_amount  |                   DOUBLE  |           0  |
+|             15  |                                      tolls_amount  |                   DOUBLE  |           0  |
+|             16  |                                         ehail_fee  |                   DOUBLE  |           0  |
+|             17  |                             improvement_surcharge  |                   DOUBLE  |           0  |
+|             18  |                              congestion_surcharge  |                   DOUBLE  |           0  |
+|             19  |                                      total_amount  |                   DOUBLE  |           0  |
+|             20  |                                      payment_type  |                  VARCHAR  |           0  |
+|             21  |                                         trip_type  |                  VARCHAR  |           0  |
+|             22  |                                pickup_location_id  |                      INT  |           0  |
+|             23  |                               dropoff_location_id  |                      INT  |           0  |
++-----------------------------------------------------------------------------------------------------------------+
 ```
 
 - [QuestDB REST API Python Client, CLI and REPL Shell](#questdb-rest-api-python-client-cli-and-repl-shell)
