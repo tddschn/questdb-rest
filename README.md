@@ -45,6 +45,7 @@ $ qdb-cli gen-config
 # edit the config file to set your local instance
 
 # lightning fast local import!
+# the imp command can infer table name using different rules, install it and run --help to see
 $ qdb-cli imp --name trips trips.csv
 +-----------------------------------------------------------------------------------------------------------------+
 |      Location:  |                                             trips  |        Pattern  | Locale  |      Errors  |
