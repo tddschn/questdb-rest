@@ -4,6 +4,8 @@
 
 The REST API is very well defined: https://questdb.com/docs/reference/api/rest/, only 3 documented endpoints. One undocumented endpoints I also implemented are `/chk` to check for if a table exists, I found the route when trying to ingest CSV via the web console.
 
+## A short tour
+
 ```
 # << a short tour of questdb-cli >>
 
@@ -82,7 +84,11 @@ $ qdb-cli imp --name trips trips.csv
 +-----------------------------------------------------------------------------------------------------------------+
 ```
 
+## Table of Contents
+
 - [QuestDB REST API Python Client, CLI and REPL Shell](#questdb-rest-api-python-client-cli-and-repl-shell)
+  - [A short tour](#a-short-tour)
+  - [Table of Contents](#table-of-contents)
   - [How's this different from the official `py-questdb-client` and `py-questdb-query` packages?](#hows-this-different-from-the-official-py-questdb-client-and-py-questdb-query-packages)
   - [Features beyond what the vanilla REST API provides](#features-beyond-what-the-vanilla-rest-api-provides)
     - [Docs, screenshots and video demos](#docs-screenshots-and-video-demos)
