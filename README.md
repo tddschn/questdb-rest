@@ -44,7 +44,7 @@ $ qdb-cli --port 443 --host https://demo.questdb.io exp 'trips' > trips.csv
 $ qdb-cli gen-config
 # edit the config file to set your local instance
 
-# lightning fast import!
+# lightning fast local import!
 $ qdb-cli imp --name trips trips.csv
 +-----------------------------------------------------------------------------------------------------------------+
 |      Location:  |                                             trips  |        Pattern  | Locale  |      Errors  |
