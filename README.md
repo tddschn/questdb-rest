@@ -48,11 +48,11 @@ $ qdb-cli gen-config
 
 # lightning fast local import!
 # the imp command can infer table name using different rules, install it and run --help to see
-$ qdb-cli imp --name trips trips.csv
+$ qdb-cli imp --name trips trips.csv --partitionBy WEEK --timestamp pickup_datetime
 +-----------------------------------------------------------------------------------------------------------------+
 |      Location:  |                                             trips  |        Pattern  | Locale  |      Errors  |
-|   Partition by  |                                              NONE  |                 |         |              |
-|      Timestamp  |                                              NONE  |                 |         |              |
+|   Partition by  |                                              WEEK  |                 |         |              |
+|      Timestamp  |                                   pickup_datetime  |                 |         |              |
 +-----------------------------------------------------------------------------------------------------------------+
 |   Rows handled  |                                           1000000  |                 |         |              |
 |  Rows imported  |                                           1000000  |                 |         |              |
