@@ -112,6 +112,13 @@ CREATE TABLE 'trips' (
 	dropoff_location_id INT
 ) timestamp(pickup_datetime) PARTITION BY WEEK WAL
 WITH maxUncommittedRows=500000, o3MaxLag=600000000us;
+
+# rename commands for your convenience (run something like `RENAME TABLE 'test.csv' TO 'myTable'`; under the hood)
+$ qdb-cli rename trips taxi_trips_feb_2018
+{
+  "status": "OK",
+  "message": "Table 'trips' renamed to 'taxi_trips_feb_2018'"
+}
 ```
 
 ## Table of Contents

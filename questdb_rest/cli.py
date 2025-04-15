@@ -1023,6 +1023,86 @@ def handle_schema(args, client: QuestDBClient):
         sys.exit(0)
 
 
+def handle_rename(args, client: QuestDBClient):
+    """Handles the rename command using the client's exec method."""
+    old_name = args.old_table_name
+    new_name = args.new_table_name
+
+    logger.info(f"Renaming table '{old_name}' to '{new_name}'...")
+
+    # --- Dry Run Check ---
+    if args.dry_run:
+        logger.info(
+            f"[DRY-RUN] Would execute: RENAME TABLE '{old_name}' TO '{new_name}';"
+        )
+        # Output a simulated response
+        print(json.dumps({"dry_run": True, "ddl": "OK (Simulated)"}, indent=2))
+        sys.exit(0)
+
+    # Quote the table names for safety - QuestDB uses single quotes for table names in RENAME
+    safe_old_name = old_name.replace("'", "''")  # Basic escaping
+    safe_new_name = new_name.replace("'", "''")  # Basic escaping
+
+    # Construct the query using the correct syntax for QuestDB
+    query = f"RENAME TABLE '{safe_old_name}' TO '{safe_new_name}';"
+
+    try:
+        # Execute the query
+        response_json = client.exec(
+            query=query,
+            # We don't need these options for a DDL statement
+            limit=None,
+            count=None,
+            nm=None,
+            timings=None,
+            explain=None,
+            quote_large_num=None,
+            statement_timeout=args.statement_timeout,
+        )
+
+        # Check for errors within the JSON response
+        if isinstance(response_json, dict) and "error" in response_json:
+            logger.error(f"Error renaming table: {response_json['error']}")
+            sys.stderr.write(f"Error: {response_json['error']}\n")
+            sys.stderr.write(f"Query: {response_json.get('query', query)}\n")
+            sys.exit(1)
+
+        # For successful response, print a simple message
+        if (
+            isinstance(response_json, dict)
+            and "ddl" in response_json
+            and response_json["ddl"] == "OK"
+        ):
+            print(
+                json.dumps(
+                    {
+                        "status": "OK",
+                        "message": f"Table '{old_name}' renamed to '{new_name}'",
+                    },
+                    indent=2,
+                )
+            )
+            logger.info(f"Successfully renamed table '{old_name}' to '{new_name}'.")
+            sys.exit(0)
+        else:
+            # If we get here, the response format was unexpected
+            print(json.dumps(response_json, indent=2))
+            logger.info("Rename operation completed with unexpected response format.")
+            sys.exit(0)
+
+    except QuestDBAPIError as e:
+        logger.error(f"API Error renaming table: {e}")
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
+    except QuestDBError as e:
+        logger.error(f"Error renaming table: {e}")
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("\nOperation cancelled by user.")
+        sys.exit(130)
+
+
 def handle_gen_config(args, client: Any = None):
     """Generates a default config file at ~/.questdb-rest/config.json."""
     config_dir = os.path.expanduser("~/.questdb-rest")
@@ -1437,6 +1517,29 @@ def main():
         help="Query timeout in milliseconds (per table).",
     )
     parser_schema.set_defaults(func=handle_schema)
+
+    # --- RENAME Sub-command ---
+    parser_rename = subparsers.add_parser(
+        "rename",
+        help="Rename a table using ALTER TABLE RENAME TO.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=False,
+    )
+    parser_rename.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help="Show this help message and exit.",
+    )
+    parser_rename.add_argument("old_table_name", help="Current name of the table.")
+    parser_rename.add_argument("new_table_name", help="New name for the table.")
+    parser_rename.add_argument(
+        "--statement-timeout",  # Allow timeout for rename operation
+        type=int,
+        help="Query timeout in milliseconds.",
+    )
+    parser_rename.set_defaults(func=handle_rename)
 
     # --- GEN-CONFIG Sub-command ---
     parser_gen_config = subparsers.add_parser(
