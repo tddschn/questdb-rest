@@ -137,6 +137,8 @@ $ qdb-cli rename trips taxi_trips_feb_2018
   - [Usage](#usage)
     - [Global options to fine tune log levels](#global-options-to-fine-tune-log-levels)
     - [Configuring CLI - DB connection options](#configuring-cli---db-connection-options)
+  - [Examples](#examples)
+    - [Advanced Scripting](#advanced-scripting)
   - [PyPI packages and installation](#pypi-packages-and-installation)
   - [The Python API](#the-python-api)
   - [Screenshots](#screenshots)
@@ -259,6 +261,20 @@ options:
 Run `qdb-cli gen-config` and edit the generated config file to specify your DB's port, host, and auth info.
 
 All options are optional and will use the default `localhost:9000` if not specified.
+
+## Examples
+
+Check the `Short Tour` section above for a quick overview of the CLI.
+
+### Advanced Scripting
+
+```bash
+# drop all tables with name regex matching 'test_table_'
+# exp exports as CSV, so we use tail to skip the header
+qdb-cli exp "select table_name from tables where table_name ~ 'test_table_'" | tail -n +2 | xargs -I{} bash -c 'echo Dropping table {}; qdb-cli exec -q "drop table {}"'
+```
+
+For convenience, I included a bash script `qdb-drop-tables-by-regex` that does exactly this - it will be installed if you install the `questdb-rest` PyPI package.
 
 ## PyPI packages and installation
 
