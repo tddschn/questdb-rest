@@ -1149,6 +1149,13 @@ def main():
         "Uses QuestDB REST API via questdb_rest library.",
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
+        epilog="""This CLI can also be used as a Python library.
+
+Links:
+- Write up and demo: https://teddysc.me/blog/questdb-rest
+- Interactive QuestDB Shell: https://teddysc.me/blog/rlwrap-questdb-shell
+- GitHub: https://github.com/tddschn/questdb-rest
+- PyPI: https://pypi.org/project/questdb-rest/""",
     )
     parser.add_argument(
         "-h",
