@@ -137,6 +137,7 @@ $ qdb-cli rename trips taxi_trips_feb_2018
   - [Usage](#usage)
     - [Global options to fine tune log levels](#global-options-to-fine-tune-log-levels)
     - [Configuring CLI - DB connection options](#configuring-cli---db-connection-options)
+    - [Accompanying Bash Scripts](#accompanying-bash-scripts)
   - [Examples](#examples)
     - [Advanced Scripting](#advanced-scripting)
   - [PyPI packages and installation](#pypi-packages-and-installation)
@@ -256,11 +257,27 @@ options:
                         Stop execution immediately if any item (file/statement/table) fails.
 ```
 
+
 ### Configuring CLI - DB connection options
 
 Run `qdb-cli gen-config` and edit the generated config file to specify your DB's port, host, and auth info.
 
 All options are optional and will use the default `localhost:9000` if not specified.
+
+### Accompanying Bash Scripts
+
+```plain
+# check next section too
+$ qdb-drop-tables-by-regex 
+
+Usage: ~/.local/bin/qdb-drop-tables-by-regex [-n] [-c] -p PATTERN
+
+Options:
+  -p PATTERN   Regex pattern to match table names (required)
+  -n           Dry run; show what would be dropped but do not execute
+  -c           Confirm each drop interactively
+  -h           Show this help message
+```
 
 ## Examples
 
