@@ -208,6 +208,15 @@ def handle_imp(args, client: QuestDBClient):
     num_files = len(args.files)
     json_separator = "\n"
 
+    # Process the shortcut flag for table name derivation
+    if args.derive_table_name_from_filename_stem_and_replace_dash_with_underscore:
+        # If the shortcut flag is set, configure its component options
+        args.name_func = "stem"
+        args.dash_to_underscore = True
+        logger.info(
+            "Using shortcut flag: Setting name_func=stem and dash_to_underscore=True"
+        )
+
     schema_content = None
     schema_file_obj = None
     schema_source_desc = None  # For logging
@@ -1257,27 +1266,33 @@ Links:
         "--name",
         help="Explicit table name. Overrides --name-func and --dash-to-underscore. Applied to ALL files.",
     )
-    parser_imp.add_argument(
+    group_imp_table_name = parser_imp.add_argument_group(
+        "Table Name Convenience Options"
+    )
+    group_imp_table_name.add_argument(
         "--name-func",
         choices=list(TABLE_NAME_FUNCTIONS.keys()),
         help=f"Function to generate table name from filename (ignored if --name set). Available: {', '.join(TABLE_NAME_FUNCTIONS.keys())}",
         default=None,
     )
-    parser_imp.add_argument(
+    group_imp_table_name.add_argument(
         "--name-func-prefix",
         help="Prefix string for 'add_prefix' name function.",
         default="",
     )  # Default to empty string
 
-    # --- NEW dash-to-underscore flag for imp ---
-    # Note: Using long form only to avoid conflict with global -D (--debug)
-    parser_imp.add_argument(
+    group_imp_table_name.add_argument(
         "-D",
         "--dash-to-underscore",
         action="store_true",
         help="If table name is derived from filename (i.e., --name not set), convert dashes (-) to underscores (_). Compatible with --name-func.",
     )
-    # --- End new flag ---
+    group_imp_table_name.add_argument(
+        "-z",
+        "--derive-table-name-from-filename-stem-and-replace-dash-with-underscore",
+        action="store_true",
+        help="Shortcut for --name-func=stem and --dash-to-underscore.",
+    )
 
     schema_group = parser_imp.add_mutually_exclusive_group()
     schema_group.add_argument(
