@@ -49,6 +49,9 @@ $ qdb-cli gen-config
 # lightning fast local import!
 # the imp command can infer table name using different rules, install it and run --help to see
 $ qdb-cli imp --name trips trips.csv --partitionBy WEEK --timestamp pickup_datetime
+
+# you can also pipe data directly from stdin using the qdb-imp-from-stdin helper script
+$ cat trips.csv | qdb-imp-from-stdin --name trips --partitionBy WEEK --timestamp pickup_datetime
 +-----------------------------------------------------------------------------------------------------------------+
 |      Location:  |                                             trips  |        Pattern  | Locale  |      Errors  |
 |   Partition by  |                                              WEEK  |                 |         |              |
@@ -291,7 +294,11 @@ Check the `Short Tour` section above for a quick overview of the CLI.
 qdb-cli exp "select table_name from tables where table_name ~ 'test_table_'" | tail -n +2 | xargs -I{} bash -c 'echo Dropping table {}; qdb-cli exec -q "drop table {}"'
 ```
 
-For convenience, I included a bash script `qdb-drop-tables-by-regex` that does exactly this - it will be installed if you install the `questdb-rest` PyPI package.
+For convenience, I included a bash script `qdb-drop-tables-by-regex` and `qdb-imp-from-stdin` (see below) that does exactly this - it will be installed if you install the `questdb-rest` PyPI package.
+
+```bash
+curl 'https://raw.githubusercontent.com/your/test.csv' | qdb-imp-from-stdin -n your_table_name
+```
 
 ## PyPI packages and installation
 
