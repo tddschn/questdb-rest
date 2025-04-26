@@ -16,6 +16,8 @@ qdb-cli = "questdb_rest.cli:main"
 questdb-cli = "questdb_rest.cli:main"
 qdb-drop-tables-by-regex = { reference = "scripts/qdb-drop-tables-by-regex", type = "file" }
 questdb-drop-tables-by-regex = { reference = "scripts/questdb-drop-tables-by-regex", type = "file" }
+qdb-imp-from-stdin = { reference = "scripts/qdb-imp-from-stdin", type = "file" }
+questdb-imp-from-stdin = { reference = "scripts/questdb-imp-from-stdin", type = "file" }
 
 [tool.poetry.urls]
 "Bug Tracker" = "https://github.com/tddschn/questdb-rest/issues"

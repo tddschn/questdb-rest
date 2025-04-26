@@ -3,6 +3,8 @@
 set -euo pipefail
 
 usage() {
+    printf "https://github.com/tddschn/questdb-rest\n\n"
+    printf "\n"
     cat <<EOF
 Usage: $0 [-n] [-c] -p PATTERN
 
