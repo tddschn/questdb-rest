@@ -11,7 +11,7 @@ OPTIONS:
   -h, --help    Show this help message and exit
 
 EXAMPLE:
-  $(basename "$0") "SELECT bid_price FROM your_shitty_instrument WHERE spread_mark < 0"
+  $(basename "$0") "SELECT bid_price FROM your_instrument WHERE spread_mark < 0"
 EOF
 }
 
