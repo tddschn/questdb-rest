@@ -83,16 +83,86 @@ def extract_statements_from_sql(sql_string: str) -> list[str]:
     return cleaned_statements
 
 
-# --------------------------------------
+def simulate_drop(args, table_name, index, total):
+    """Simulates the drop table command."""
+    logger.info(f"[DRY-RUN] Simulating DROP TABLE ({index}/{total}):")
+    logger.info(f"[DRY-RUN]   Target Table: '{table_name}'")
+    # Quote name for simulation consistency
+    safe_table_name = table_name.replace("'", "''")
+    logger.info(f"[DRY-RUN]   Would execute: DROP TABLE '{safe_table_name}';")
+    # Simulate DDL OK response
+    print(
+        json.dumps(
+            {"dry_run": True, "table_dropped": table_name, "ddl": "OK (Simulated)"},
+            indent=2,
+        )
+    )
 
-# --- Dry Run Simulation Helpers ---
 
+def simulate_rename(args, client):
+    """Simulates the rename command, including backup logic."""
+    old_name = args.old_table_name
+    new_name = args.new_table_name
+    safe_old_name = old_name.replace("'", "''")
+    safe_new_name = new_name.replace("'", "''")
 
-# questdb_rest/cli.py
+    logger.info("[DRY-RUN] Simulating rename operation:")
+    logger.info(f"[DRY-RUN]   From: '{old_name}'")
+    logger.info(f"[DRY-RUN]   To:   '{new_name}'")
 
-# --- Dry Run Simulation Helpers ---
+    # Simulate checking if the *new* table name exists
+    logger.info(
+        f"[DRY-RUN]   1. Checking if target table '{new_name}' exists... (Assuming Yes for backup simulation)"
+    )
+    new_table_exists = True  # Assume exists to simulate backup path
 
-# [ Keep existing simulate_imp, simulate_exec, simulate_exp, simulate_chk, simulate_schema ]
+    backup_name = None
+    if new_table_exists:
+        if args.no_backup_if_new_table_exists:
+            logger.info(
+                f"[DRY-RUN]   2. --no-backup-if-new-table-exists specified. Original table '{new_name}' will NOT be backed up. Rename might fail."
+            )
+        else:
+            backup_name = f"qdb_cli_backup_{new_name}_{uuid.uuid4()}".replace("-", "_")[
+                :250
+            ]
+            safe_backup_name = backup_name.replace("'", "''")
+            logger.info(
+                f"[DRY-RUN]   2. Target table '{new_name}' exists. Will attempt backup."
+            )
+            logger.info(f"[DRY-RUN]      Generated backup name: '{backup_name}'")
+            # Simulate check if backup name exists
+            logger.info(
+                f"[DRY-RUN]      Checking if backup table '{backup_name}' exists... (Assuming No)"
+            )
+            # Simulate backup rename
+            logger.info(
+                f"[DRY-RUN]      Would execute: RENAME TABLE '{safe_new_name}' TO '{safe_backup_name}';"
+            )
+    else:
+        logger.info(
+            f"[DRY-RUN]   2. Target table '{new_name}' does not exist. No backup needed."
+        )
+
+    # Simulate the final rename
+    logger.info(f"[DRY-RUN]   3. Renaming original table to target name.")
+    logger.info(
+        f"[DRY-RUN]      Would execute: RENAME TABLE '{safe_old_name}' TO '{safe_new_name}';"
+    )
+
+    # Output simulated success response
+    result = {
+        "dry_run": True,
+        "operation": "rename",
+        "status": "OK (Simulated)",
+        "old_name": old_name,
+        "new_name": new_name,
+        "backup_of_new_name": backup_name
+        if new_table_exists and not args.no_backup_if_new_table_exists
+        else None,
+    }
+    print(json.dumps(result, indent=2))
+    sys.exit(0)
 
 
 # Update simulate_create_or_replace to reflect the new workflow
@@ -961,11 +1031,110 @@ def handle_chk(args, client: QuestDBClient):
         sys.exit(130)
 
 
-# questdb_rest/cli.py
+def handle_drop(args, client: QuestDBClient):
+    """Handles the drop/drop-table command using the client's exec method."""
+    any_table_failed = False
+    num_tables = len(args.table_names)
+    json_separator = "\n"
+    first_output_written = False
 
-# --- Command Handlers ---
+    for i, table_name in enumerate(args.table_names):
+        logger.info(
+            f"--- Processing DROP for table {i + 1}/{num_tables}: '{table_name}' ---"
+        )
 
-# [ Keep existing handle_imp, handle_exec, handle_exp, handle_chk, handle_schema, handle_rename, handle_gen_config ]
+        # --- Dry Run Check ---
+        if args.dry_run:
+            simulate_drop(args, table_name, i + 1, num_tables)
+            if first_output_written:  # Print separator if not first dry-run statement
+                sys.stdout.write(json_separator)
+            first_output_written = True
+            continue  # Skip actual execution
+
+        # Quote the table name for safety - QuestDB uses single quotes for table names in DROP
+        safe_table_name = table_name.replace("'", "''")  # Basic escaping
+        query = f"DROP TABLE '{safe_table_name}';"
+
+        try:
+            logger.info(f"Executing: {query}")
+            response_json = client.exec(
+                query=query,
+                statement_timeout=args.statement_timeout,
+            )
+
+            # Check for errors within the JSON response
+            if isinstance(response_json, dict) and "error" in response_json:
+                error_msg = response_json["error"]
+                # Check if the error is "table does not exist" - treat as warning? Or configurable?
+                # For now, treat all errors as failures.
+                logger.error(f"Error dropping table '{table_name}': {error_msg}")
+                sys.stderr.write(
+                    f"-- Error dropping table '{table_name}' --\nError: {error_msg}\n"
+                )
+                sys.stderr.write(f"Query: {response_json.get('query', query)}\n")
+                any_table_failed = True
+                if args.stop_on_error:
+                    logger.warning(
+                        "Stopping execution due to error (stop-on-error enabled)."
+                    )
+                    sys.exit(1)
+                else:
+                    logger.warning("Continuing execution (stop-on-error disabled).")
+                    continue  # Skip to next table
+
+            # Print separator if this is not the first successful output
+            if first_output_written:
+                sys.stdout.write(json_separator)
+
+            # Success case: print confirmation JSON
+            result = {
+                "status": "OK",
+                "table_dropped": table_name,
+                "message": f"Table '{table_name}' dropped successfully.",
+                # Include DDL response if present
+                "ddl_response": response_json.get("ddl")
+                if isinstance(response_json, dict)
+                else None,
+            }
+            print(json.dumps(result, indent=2))
+            first_output_written = True
+            logger.info(f"Table '{table_name}' dropped successfully.")
+
+        except QuestDBAPIError as e:
+            logger.warning(f"Dropping table '{table_name}' failed with API error: {e}")
+            sys.stderr.write(f"-- Error dropping table '{table_name}' --\nError: {e}\n")
+            any_table_failed = True
+            if args.stop_on_error:
+                logger.warning(
+                    "Stopping execution due to API error (stop-on-error enabled)."
+                )
+                sys.exit(1)
+            else:
+                logger.warning("Continuing execution (stop-on-error disabled).")
+        except QuestDBError as e:  # Catch other client errors (connection etc.)
+            logger.warning(f"Dropping table '{table_name}' failed: {e}")
+            sys.stderr.write(f"-- Error dropping table '{table_name}' --\nError: {e}\n")
+            any_table_failed = True
+            if args.stop_on_error:
+                logger.warning(
+                    "Stopping execution due to error (stop-on-error enabled)."
+                )
+                sys.exit(1)
+            else:
+                logger.warning("Continuing execution (stop-on-error disabled).")
+        except KeyboardInterrupt:
+            logger.info(
+                f"\nOperation cancelled by user while dropping table '{table_name}'."
+            )
+            sys.exit(130)
+
+    # --- Final Exit Status ---
+    if any_table_failed:
+        logger.warning("One or more tables failed to drop.")
+        sys.exit(2)  # Indicate partial failure if stop-on-error was false
+    else:
+        logger.info("All requested tables processed for dropping.")
+        sys.exit(0)
 
 
 def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
@@ -1567,78 +1736,163 @@ def handle_rename(args, client: QuestDBClient):
     old_name = args.old_table_name
     new_name = args.new_table_name
 
-    logger.info(f"Renaming table '{old_name}' to '{new_name}'...")
+    logger.info(f"Preparing to rename table '{old_name}' to '{new_name}'...")
 
     # --- Dry Run Check ---
     if args.dry_run:
-        logger.info(
-            f"[DRY-RUN] Would execute: RENAME TABLE '{old_name}' TO '{new_name}';"
-        )
-        # Output a simulated response
-        print(json.dumps({"dry_run": True, "ddl": "OK (Simulated)"}, indent=2))
-        sys.exit(0)
+        # Pass client to simulation in case it needs it in the future (though not currently)
+        simulate_rename(args, client)  # simulate_rename handles sys.exit(0)
 
     # Quote the table names for safety - QuestDB uses single quotes for table names in RENAME
     safe_old_name = old_name.replace("'", "''")  # Basic escaping
     safe_new_name = new_name.replace("'", "''")  # Basic escaping
 
-    # Construct the query using the correct syntax for QuestDB
-    query = f"RENAME TABLE '{safe_old_name}' TO '{safe_new_name}';"
+    backup_name = None
+    backup_created = False
+    new_table_originally_existed = False
 
     try:
-        # Execute the query
+        # 1. Check if the new table name already exists
+        logger.info(f"Checking if target table name '{new_name}' already exists...")
+        new_table_originally_existed = client.table_exists(new_name)
+
+        if new_table_originally_existed:
+            logger.warning(f"Target table name '{new_name}' already exists.")
+            if args.no_backup_if_new_table_exists:
+                logger.warning(
+                    "--no-backup-if-new-table-exists specified. Proceeding without backup. The final rename might fail."
+                )
+                # No backup action needed, proceed to final rename
+            else:
+                # Generate backup name for the *existing* new_name table
+                backup_name = f"qdb_cli_backup_{new_name}_{uuid.uuid4()}".replace(
+                    "-", "_"
+                )[:250]
+                safe_backup_name = backup_name.replace("'", "''")
+                logger.info(
+                    f"Attempting to back up existing table '{new_name}' to '{backup_name}'..."
+                )
+
+                # Check if generated backup name clashes (highly unlikely)
+                if client.table_exists(backup_name):
+                    logger.error(
+                        f"Generated backup name '{backup_name}' already exists. Cannot proceed."
+                    )
+                    sys.exit(1)
+
+                # Execute backup rename
+                backup_query = (
+                    f"RENAME TABLE '{safe_new_name}' TO '{safe_backup_name}';"
+                )
+                try:
+                    response = client.exec(
+                        query=backup_query, statement_timeout=args.statement_timeout
+                    )
+                    if isinstance(response, dict) and "error" in response:
+                        error_detail = response["error"]
+                        if "query" in response:
+                            error_detail += f" (Query: {response['query']})"
+                        raise QuestDBAPIError(
+                            f"Failed to back up existing table: {error_detail}"
+                        )
+                    logger.info(
+                        f"Successfully backed up existing table '{new_name}' to '{backup_name}'."
+                    )
+                    backup_created = True
+                except QuestDBError as backup_err:
+                    logger.error(
+                        f"Error backing up existing table '{new_name}': {backup_err}"
+                    )
+                    # If backup fails, we should not proceed with the final rename
+                    sys.exit(1)
+        else:
+            logger.info(
+                f"Target table name '{new_name}' does not exist. No backup needed."
+            )
+
+        # 2. Execute the final rename operation
+        logger.info(f"Renaming table '{old_name}' to '{new_name}'...")
+        final_rename_query = f"RENAME TABLE '{safe_old_name}' TO '{safe_new_name}';"
         response_json = client.exec(
-            query=query,
-            # We don't need these options for a DDL statement
-            limit=None,
-            count=None,
-            nm=None,
-            timings=None,
-            explain=None,
-            quote_large_num=None,
+            query=final_rename_query,
             statement_timeout=args.statement_timeout,
+            # Default exec options are fine
         )
 
-        # Check for errors within the JSON response
+        # Check for errors within the JSON response of the final rename
         if isinstance(response_json, dict) and "error" in response_json:
             logger.error(f"Error renaming table: {response_json['error']}")
             sys.stderr.write(f"Error: {response_json['error']}\n")
-            sys.stderr.write(f"Query: {response_json.get('query', query)}\n")
-            sys.exit(1)
-
-        # For successful response, print a simple message
-        if (
-            isinstance(response_json, dict)
-            and "ddl" in response_json
-            and response_json["ddl"] == "OK"
-        ):
-            print(
-                json.dumps(
-                    {
-                        "status": "OK",
-                        "message": f"Table '{old_name}' renamed to '{new_name}'",
-                    },
-                    indent=2,
-                )
+            sys.stderr.write(
+                f"Query: {response_json.get('query', final_rename_query)}\n"
             )
-            logger.info(f"Successfully renamed table '{old_name}' to '{new_name}'.")
-            sys.exit(0)
-        else:
-            # If we get here, the response format was unexpected
-            print(json.dumps(response_json, indent=2))
-            logger.info("Rename operation completed with unexpected response format.")
-            sys.exit(0)
+            # Attempt to roll back the backup if one was created
+            if backup_created:
+                logger.warning("Attempting to roll back backup...")
+                rollback_query = (
+                    f"RENAME TABLE '{safe_backup_name}' TO '{safe_new_name}';"
+                )
+                try:
+                    rb_response = client.exec(
+                        query=rollback_query, statement_timeout=args.statement_timeout
+                    )
+                    if isinstance(rb_response, dict) and "error" in rb_response:
+                        logger.error(
+                            f"!!! ROLLBACK FAILED: Could not rename '{backup_name}' back to '{new_name}': {rb_response['error']}"
+                        )
+                    else:
+                        logger.info(
+                            f"Successfully rolled back backup: '{backup_name}' renamed back to '{new_name}'."
+                        )
+                except Exception as rb_err:
+                    logger.error(
+                        f"!!! ROLLBACK FAILED: Error during rollback rename: {rb_err}"
+                    )
+            sys.exit(1)  # Exit after error and potential rollback attempt
+
+        # Success Case
+        success_message = f"Table '{old_name}' successfully renamed to '{new_name}'."
+        if backup_created:
+            success_message += (
+                f" Existing table at '{new_name}' was backed up as '{backup_name}'."
+            )
+        elif new_table_originally_existed and args.no_backup_if_new_table_exists:
+            success_message += (
+                f" Existing table at '{new_name}' was overwritten (no backup)."
+            )
+
+        logger.info(success_message)
+        print(
+            json.dumps(
+                {
+                    "status": "OK",
+                    "message": success_message,
+                    "old_name": old_name,
+                    "new_name": new_name,
+                    "backup_of_new_name": backup_name if backup_created else None,
+                },
+                indent=2,
+            )
+        )
+        sys.exit(0)
 
     except QuestDBAPIError as e:
-        logger.error(f"API Error renaming table: {e}")
+        # Catch errors during existence checks or backup rename not caught above
+        logger.error(f"API Error during rename process: {e}")
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     except QuestDBError as e:
-        logger.error(f"Error renaming table: {e}")
+        # Catch connection errors etc.
+        logger.error(f"Error during rename process: {e}")
         sys.stderr.write(f"Error: {e}\n")
         sys.exit(1)
     except KeyboardInterrupt:
         logger.info("\nOperation cancelled by user.")
+        # Note: If cancelled after backup but before final rename, state is inconsistent.
+        if backup_created:
+            logger.warning(
+                f"!!! Operation cancelled after creating backup '{backup_name}'. The original table '{old_name}' was not renamed."
+            )
         sys.exit(130)
 
 
@@ -2083,7 +2337,7 @@ Links:
     # --- RENAME Sub-command ---
     parser_rename = subparsers.add_parser(
         "rename",
-        help="Rename a table using RENAME TABLE.",
+        help="Rename a table using RENAME TABLE. Backs up target name by default if it exists.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=False,
     )
@@ -2097,9 +2351,14 @@ Links:
     parser_rename.add_argument("old_table_name", help="Current name of the table.")
     parser_rename.add_argument("new_table_name", help="New name for the table.")
     parser_rename.add_argument(
-        "--statement-timeout",  # Allow timeout for rename operation
+        "--no-backup-if-new-table-exists",
+        action="store_true",
+        help="If the new table name already exists, do not back it up first. Rename might fail.",
+    )
+    parser_rename.add_argument(
+        "--statement-timeout",  # Allow timeout for rename operation(s)
         type=int,
-        help="Query timeout in milliseconds.",
+        help="Query timeout in milliseconds (per RENAME statement).",
     )
     parser_rename.set_defaults(func=handle_rename)
 
@@ -2168,6 +2427,32 @@ Links:
         help="Query timeout in milliseconds for underlying operations.",
     )
     parser_cor.set_defaults(func=handle_create_or_replace_table_from_query)
+
+    # --- DROP Sub-command (NEW) ---
+    parser_drop = subparsers.add_parser(
+        "drop",
+        aliases=["drop-table"],  # Add alias
+        help="Drop one or more tables using DROP TABLE.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=False,
+    )
+    parser_drop.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help="Show this help message and exit.",
+    )
+    parser_drop.add_argument(
+        "table_names", nargs="+", help="Name(s) of the table(s) to drop."
+    )
+    # Inherits global --stop-on-error
+    parser_drop.add_argument(
+        "--statement-timeout",  # Allow timeout per table drop
+        type=int,
+        help="Query timeout in milliseconds (per table).",
+    )
+    parser_drop.set_defaults(func=handle_drop)
 
     # --- GEN-CONFIG Sub-command ---
     parser_gen_config = subparsers.add_parser(
@@ -2265,7 +2550,22 @@ Links:
         # Prompt if password wasn't loaded from config
         if actual_password is None:  # Check again after attempting config load
             try:
-                prompt_str = f"Password for user '{args.user}' at {args.host or 'default host'}: "
+                # Determine host for prompt (use default if not specified)
+                host_for_prompt = DEFAULT_HOST
+                if args.host:
+                    _, actual_host_for_prompt = detect_scheme_in_host(args.host)
+                    host_for_prompt = actual_host_for_prompt
+                elif os.path.exists(
+                    config_to_check
+                ):  # Check config host if no CLI host
+                    try:
+                        with open(config_to_check, "r") as cf:
+                            config = json.load(cf)
+                        host_for_prompt = config.get("host", DEFAULT_HOST)
+                    except Exception:
+                        pass  # Stick with default host if config load fails here
+
+                prompt_str = f"Password for user '{args.user}' at {host_for_prompt}: "
                 actual_password = getpass(prompt_str)
                 if not actual_password:  # Handle empty input during prompt
                     logger.warning("Password required but not provided.")
@@ -2303,6 +2603,9 @@ Links:
             parser_exec.error(
                 "No SQL query provided via --query, --file, --get-query-from-python-module, or stdin."
             )
+    elif args.command == "rename":
+        if args.old_table_name == args.new_table_name:
+            parser_rename.error("Old and new table names cannot be the same.")
 
     # --- Instantiate Client (if needed and not dry run) ---
     client = None
@@ -2355,8 +2658,9 @@ Links:
                     base_port = (
                         int(host_port_parts[1].split("/")[0])
                         if len(host_port_parts) > 1
+                        and host_port_parts[1].split("/")[0].isdigit()
                         else QuestDBClient.DEFAULT_PORT
-                    )  # Adjust if needed
+                    )
                     base_user = base_client.auth[0] if base_client.auth else None
                     base_password = base_client.auth[1] if base_client.auth else None
                     base_timeout = base_client.timeout
@@ -2395,7 +2699,13 @@ Links:
 
             # Log final connection details (mask password)
             log_host = client.base_url.split("://")[1].split(":")[0]
-            log_port = int(client.base_url.split(":")[-1].split("/")[0])
+            # Correctly extract port even without trailing slash
+            port_part = client.base_url.split(":")[-1]
+            log_port = (
+                int(port_part.split("/")[0])
+                if port_part.split("/")[0].isdigit()
+                else QuestDBClient.DEFAULT_PORT
+            )
             log_scheme = client.base_url.split("://")[0]
             log_user_info = f" as user '{client.auth[0]}'" if client.auth else ""
             logger.info(
@@ -2423,7 +2733,8 @@ Links:
         sys.exit(e.code)
     except (QuestDBConnectionError, QuestDBAPIError, QuestDBError) as e:
         # Catch specific client errors that might not be caught in handlers
-        logger.error(f"QuestDB Error: {e}")
+        # Logged by client already, just exit non-zero
+        # logger.error(f"QuestDB Error: {e}") # Redundant logging
         sys.exit(1)
     except Exception as e:
         # Catch-all for unexpected errors in command handlers

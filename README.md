@@ -141,6 +141,7 @@ $ qdb-cli rename trips taxi_trips_feb_2018
     - [Global options to fine tune log levels](#global-options-to-fine-tune-log-levels)
   - [Subcommands that run complex workflows](#subcommands-that-run-complex-workflows)
     - [`create-or-replace-table-from-query` or `cor`](#create-or-replace-table-from-query-or-cor)
+    - [`rename` with table exists checks](#rename-with-table-exists-checks)
     - [Configuring CLI - DB connection options](#configuring-cli---db-connection-options)
     - [Accompanying Bash Scripts](#accompanying-bash-scripts)
   - [Examples](#examples)
@@ -333,6 +334,64 @@ INFO: Successfully renamed temporary table '__qdb_cli_temp_equities_1_26b1ac1a_5
   "target_table": "equities_1",
   "backup_table": "qdb_cli_backup_equities_1_bc345051_9157_4e3c_83ec_70e8430a3f64",
   "original_dropped_no_backup": false
+}
+```
+
+### `rename` with table exists checks
+
+```plain
+qdb-cli rename --help
+
+usage: questdb-cli rename [-h] [--no-backup-if-new-table-exists] [--statement-timeout STATEMENT_TIMEOUT] old_table_name new_table_name
+
+positional arguments:
+  old_table_name        Current name of the table.
+  new_table_name        New name for the table.
+
+options:
+  -h, --help            Show this help message and exit.
+  --no-backup-if-new-table-exists
+                        If the new table name already exists, do not back it up first. Rename might fail. (default: False)
+  --statement-timeout STATEMENT_TIMEOUT
+                        Query timeout in milliseconds (per RENAME statement). (default: None)
+```
+
+Example:
+
+```plain
+qdb chk trades2
+{
+  "tableName": "trades2",
+  "status": "Exists"
+}
+❯ qdb chk trades3
+{
+  "tableName": "trades3",
+  "status": "Exists"
+}
+❯ qdb rename trades2 trades3
+WARNING: Target table name 'trades3' already exists.
+{
+  "status": "OK",
+  "message": "Table 'trades2' successfully renamed to 'trades3'. Existing table at 'trades3' was backed up as 'qdb_cli_backup_trades3_f652d5ac_b9dd_4561_a835_eae947866e4f'.",
+  "old_name": "trades2",
+  "new_name": "trades3",
+  "backup_of_new_name": "qdb_cli_backup_trades3_f652d5ac_b9dd_4561_a835_eae947866e4f"
+}
+
+# ok let's drop it now
+qdb drop qdb_cli_backup_trades3_f652d5ac_b9dd_4561_a835_eae947866e4f
+{
+  "status": "OK",
+  "table_dropped": "qdb_cli_backup_trades3_f652d5ac_b9dd_4561_a835_eae947866e4f",
+  "message": "Table 'qdb_cli_backup_trades3_f652d5ac_b9dd_4561_a835_eae947866e4f' dropped successfully.",
+  "ddl_response": "OK"
+}
+
+qdb chk qdb_cli_backup_trades3_f652d5ac_b9dd_4561_a835_eae947866e4f
+{
+  "tableName": "qdb_cli_backup_trades3_f652d5ac_b9dd_4561_a835_eae947866e4f",
+  "status": "Does not exist"
 }
 ```
 
