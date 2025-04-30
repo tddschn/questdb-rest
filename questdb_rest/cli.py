@@ -88,18 +88,45 @@ def extract_statements_from_sql(sql_string: str) -> list[str]:
 # --- Dry Run Simulation Helpers ---
 
 
+# questdb_rest/cli.py
+
+# --- Dry Run Simulation Helpers ---
+
+# [ Keep existing simulate_imp, simulate_exec, simulate_exp, simulate_chk, simulate_schema ]
+
+
+# Update simulate_create_or_replace to reflect the new workflow
 def simulate_create_or_replace(args, query):
-    """Simulates the create-or-replace-table-from-query command."""
+    """Simulates the create-or-replace-table-from-query command (temp table workflow)."""
     target_table = args.table
-    logger.info("[DRY-RUN] Simulating create-or-replace-table-from-query:")
+    temp_table_name = f"__qdb_cli_temp_{target_table}_{uuid.uuid4()}".replace("-", "_")[
+        :250
+    ]  # Generate temp name
+    logger.info(
+        "[DRY-RUN] Simulating create-or-replace-table-from-query (using temp table):"
+    )
     logger.info(f"[DRY-RUN]   Target Table: '{target_table}'")
     logger.info(
-        "[DRY-RUN]   Query Source: (provided via args/stdin)"
-    )  # Simplification for dry run
+        f"[DRY-RUN]   Query Source: (provided via args/stdin)"
+    )  # Simplification
+    logger.info(f"[DRY-RUN]   Temporary Table Name: '{temp_table_name}'")
+
+    # Simulate CREATE TEMP TABLE statement construction
+    create_parts = [
+        f"CREATE TABLE {temp_table_name} AS ({query})"
+    ]  # Use unquoted temp name
+    if args.timestamp:
+        create_parts.append(
+            f"TIMESTAMP({args.timestamp})"
+        )  # Assuming simple timestamp col name
+    if args.partitionBy:
+        create_parts.append(f"PARTITION BY {args.partitionBy}")
+    create_statement = " ".join(create_parts) + ";"
+    logger.info(f"[DRY-RUN]   1. Would execute: {create_statement}")
 
     # Simulate checking if target table exists (assume it exists for backup simulation)
     logger.info(
-        f"[DRY-RUN]   Checking if target table '{target_table}' exists... (Assuming Yes)"
+        f"[DRY-RUN]   2. Checking if target table '{target_table}' exists... (Assuming Yes)"
     )
     original_exists = True  # Assume exists for simulation
 
@@ -107,32 +134,40 @@ def simulate_create_or_replace(args, query):
     if original_exists:
         if args.no_backup_original_table:
             logger.info(
-                f"[DRY-RUN]   --no-backup-original-table specified. Will DROP original table '{target_table}' if it exists."
+                f"[DRY-RUN]   3. --no-backup-original-table specified. Would DROP original table '{target_table}'."
             )
-            logger.info(f"[DRY-RUN]   Would execute: DROP TABLE '{target_table}';")
+            # Use correct quoting (single quotes) for DROP TABLE identifier
+            logger.info(f"[DRY-RUN]      Would execute: DROP TABLE '{target_table}';")
         else:
             if args.backup_table_name:
                 backup_name = args.backup_table_name
-                logger.info(f"[DRY-RUN]   Using provided backup name: '{backup_name}'")
+                logger.info(
+                    f"[DRY-RUN]   3. Using provided backup name: '{backup_name}'"
+                )
             else:
-                backup_name = f"qdb_cli_backup_{target_table}_{uuid.uuid4()}"[:250]
-                logger.info(f"[DRY-RUN]   Generated backup name: '{backup_name}'")
+                backup_name = f"qdb_cli_backup_{target_table}_{uuid.uuid4()}"[
+                    :250
+                ].replace("-", "_")
+                logger.info(f"[DRY-RUN]   3. Generated backup name: '{backup_name}'")
             # Simulate checking if backup name exists (assume it doesn't)
             logger.info(
-                f"[DRY-RUN]   Checking if backup table '{backup_name}' exists... (Assuming No)"
+                f"[DRY-RUN]      Checking if backup table '{backup_name}' exists... (Assuming No)"
             )
+            # Use correct quoting (single quotes) for RENAME TABLE identifiers
             logger.info(
-                f"[DRY-RUN]   Would execute: RENAME TABLE '{target_table}' TO '{backup_name}';"
+                f"[DRY-RUN]      Would execute: RENAME TABLE '{target_table}' TO '{backup_name}';"
             )
+    else:
+        logger.info(
+            f"[DRY-RUN]   3. Target table '{target_table}' does not exist. No backup/drop needed."
+        )
 
-    # Simulate CREATE TABLE AS statement construction
-    create_parts = [f"CREATE TABLE '{target_table}' AS ({query})"]
-    if args.timestamp:
-        create_parts.append(f"TIMESTAMP({args.timestamp})")
-    if args.partitionBy:
-        create_parts.append(f"PARTITION BY {args.partitionBy}")
-    create_statement = " ".join(create_parts) + ";"
-    logger.info(f"[DRY-RUN]   Would execute: {create_statement}")
+    # Simulate final RENAME
+    logger.info(f"[DRY-RUN]   4. Renaming temporary table to target table.")
+    # Use correct quoting (single quotes) for RENAME TABLE identifiers
+    logger.info(
+        f"[DRY-RUN]      Would execute: RENAME TABLE '{temp_table_name}' TO '{target_table}';"
+    )
 
     # Simulate success response
     print(
@@ -140,9 +175,12 @@ def simulate_create_or_replace(args, query):
             {
                 "dry_run": True,
                 "operation": "create_or_replace_table_from_query",
+                "workflow": "temporary_table",
                 "target_table": target_table,
                 "status": "OK (Simulated)",
-                "backup_table": backup_name,
+                "backup_table": backup_name
+                if original_exists and not args.no_backup_original_table
+                else None,
                 "original_dropped_no_backup": original_exists
                 and args.no_backup_original_table,
             },
@@ -923,20 +961,37 @@ def handle_chk(args, client: QuestDBClient):
         sys.exit(130)
 
 
+# questdb_rest/cli.py
+
+# --- Command Handlers ---
+
+# [ Keep existing handle_imp, handle_exec, handle_exp, handle_chk, handle_schema, handle_rename, handle_gen_config ]
+
+
 def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
     """
     Handles the create-or-replace-table-from-query command.
-    Follows the safer Rename -> Create -> Optional Drop Backup pattern.
+    Uses the temporary table workflow: Create Temp -> Rename/Drop Original -> Rename Temp.
     """
     import importlib  # For query from module
 
     target_table = args.table
-    logger.info(f"Starting create-or-replace operation for table '{target_table}'...")
+    # Generate a unique temporary table name unlikely to collide
+    # Replace hyphens from uuid as they might not be valid in unquoted identifiers
+    temp_table_name = f"__qdb_cli_temp_{target_table}_{uuid.uuid4()}".replace("-", "_")
+    temp_table_name = temp_table_name[:250]  # Ensure within length limits
+    # Quote the temp table name for safety in RENAME/DROP later
+    safe_temp_table_name_quoted = temp_table_name.replace("'", "''")
+
+    logger.info(
+        f"Starting create-or-replace operation for table '{target_table}' using temp table '{temp_table_name}'..."
+    )
 
     # --- 1. Get SQL Query Content ---
     sql_content = ""
     source_description = ""
     # Logic copied and adapted from handle_exec to get query input
+    # [ ... same query input logic as before ... ]
     if args.get_query_from_python_module:
         try:
             module_spec, sep, var_name = args.get_query_from_python_module.partition(
@@ -981,7 +1036,7 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
         logger.warning("No SQL query provided via argument, file, module, or stdin.")
         sys.exit(1)
 
-    # Extract the *single* defining query (ensure it's not multiple statements)
+    # Extract the *single* defining query
     try:
         statements = extract_statements_from_sql(sql_content)
         if len(statements) == 0:
@@ -991,6 +1046,16 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                 f"Multiple SQL statements found in {source_description}. Only the first statement will be used for CREATE TABLE AS."
             )
         defining_query = statements[0]
+
+        # --- VALIDATION (Optional but recommended): Check if it looks like SELECT ---
+        # This is informational now, as we trust the user's assertion about syntax
+        if not defining_query.strip().lower().startswith("select"):
+            logger.warning(
+                f"Input query from {source_description} does not start with SELECT. Assuming it's valid QuestDB shorthand."
+            )
+            logger.warning(f"Query: {defining_query}")
+        # --- End Validation ---
+
         logger.info(f"Using query from {source_description} for table creation.")
         logger.debug(
             f"Query: {defining_query[:100]}{'...' if len(defining_query) > 100 else ''}"
@@ -1001,40 +1066,107 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
 
     # --- Dry Run Check ---
     if args.dry_run:
-        simulate_create_or_replace(args, defining_query)
+        simulate_create_or_replace(args, defining_query)  # Use updated simulation
         sys.exit(0)
 
     # --- Actual Execution ---
     original_exists = False
     backup_name = None
+    safe_backup_name_quoted = None  # Store quoted backup name if created
     backup_created = False
     original_dropped_no_backup = False
-    rollback_needed = False
+    temp_table_created = False
+
+    # Quote the target table name for use in RENAME/DROP
+    safe_target_table_quoted = target_table.replace("'", "''")
+
+    # --- Cleanup function in case of errors ---
+    def cleanup_temp_table():
+        if temp_table_created:
+            logger.warning(
+                f"Attempting to clean up temporary table '{temp_table_name}'..."
+            )
+            try:
+                # Use single quotes for DROP identifier
+                drop_temp_query = f"DROP TABLE '{safe_temp_table_name_quoted}';"
+                response = client.exec(
+                    query=drop_temp_query, statement_timeout=args.statement_timeout
+                )
+                if isinstance(response, dict) and "error" in response:
+                    logger.error(
+                        f"Cleanup failed: Could not drop temporary table '{temp_table_name}': {response['error']}"
+                    )
+                else:
+                    logger.info(
+                        f"Successfully cleaned up temporary table '{temp_table_name}'."
+                    )
+            except Exception as cleanup_err:
+                logger.error(
+                    f"Cleanup failed: Error dropping temporary table '{temp_table_name}': {cleanup_err}"
+                )
 
     try:
-        # --- 2. Check if target table exists ---
+        # --- 2. Create Temporary Table ---
+        logger.info(f"Creating temporary table '{temp_table_name}' from query...")
+        # don't quote, must use literal
+        safe_timestamp_col = args.timestamp if args.timestamp else None
+
+        create_parts = [
+            f"CREATE TABLE {temp_table_name} AS ({defining_query})"
+        ]  # Use unquoted temp table name
+        if safe_timestamp_col:
+            create_parts.append(f"TIMESTAMP({safe_timestamp_col})")
+        if args.partitionBy:
+            create_parts.append(f"PARTITION BY {args.partitionBy}")
+
+        create_query = " ".join(create_parts) + ";"
+        logger.debug(f"Executing CREATE TEMP statement: {create_query}")
+
+        try:
+            response = client.exec(
+                query=create_query, statement_timeout=args.statement_timeout
+            )
+            if isinstance(response, dict) and "error" in response:
+                error_detail = response["error"]
+                if "query" in response:
+                    error_detail += f" (Query: {response['query']})"
+                raise QuestDBAPIError(
+                    f"Failed to create temporary table: {error_detail}",
+                    response_data=response,
+                )
+            logger.info(f"Successfully created temporary table '{temp_table_name}'.")
+            temp_table_created = True
+        except QuestDBError as create_err:
+            logger.error(
+                f"Error creating temporary table '{temp_table_name}': {create_err}"
+            )
+            # No cleanup needed here as temp table wasn't created
+            sys.exit(1)
+
+        # --- 3. Check if target table exists ---
         logger.info(f"Checking if target table '{target_table}' exists...")
         original_exists = client.table_exists(target_table)
-        if original_exists:
-            logger.info(f"Target table '{target_table}' exists.")
-        else:
-            logger.info(
-                f"Target table '{target_table}' does not exist. Will proceed with creation."
-            )
 
-        # --- 3. Handle Existing Table (Backup/Drop) ---
+        # --- 4. Handle Existing Table (Backup/Drop) ---
+        rename_original_failed = False
         if original_exists:
             if args.no_backup_original_table:
                 # Drop the original table directly
                 logger.info(
                     f"--no-backup-original-table specified. Dropping original table '{target_table}'..."
                 )
-                drop_query = f"DROP TABLE '{target_table}';"  # QuestDB uses single quotes for table names in DROP/RENAME
+                # Use single quotes for DROP identifier
+                drop_query = f"DROP TABLE '{safe_target_table_quoted}';"
                 try:
-                    response = client.exec(query=drop_query)
+                    response = client.exec(
+                        query=drop_query, statement_timeout=args.statement_timeout
+                    )
                     if isinstance(response, dict) and "error" in response:
+                        error_detail = response["error"]
+                        if "query" in response:
+                            error_detail += f" (Query: {response['query']})"
                         raise QuestDBAPIError(
-                            f"Failed to drop original table: {response['error']}"
+                            f"Failed to drop original table: {error_detail}"
                         )
                     logger.info(
                         f"Successfully dropped original table '{target_table}'."
@@ -1042,7 +1174,7 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                     original_dropped_no_backup = True
                 except QuestDBError as e:
                     logger.error(f"Error dropping original table '{target_table}': {e}")
-                    # Cannot proceed if drop fails
+                    cleanup_temp_table()  # Clean up temp table as we can't proceed
                     sys.exit(1)
             else:
                 # Determine backup name
@@ -1050,17 +1182,21 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                     backup_name = args.backup_table_name
                     logger.info(f"Using provided backup name: '{backup_name}'")
                 else:
-                    # Use uuid for uniqueness and truncate
                     gen_name = f"qdb_cli_backup_{target_table}_{uuid.uuid4()}"
-                    backup_name = gen_name[:250]  # QuestDB max identifier length is 255
+                    backup_name = gen_name[:250].replace("-", "_")
                     logger.info(f"Generated backup name: '{backup_name}'")
+
+                safe_backup_name_quoted = backup_name.replace(
+                    "'", "''"
+                )  # Quote for potential rollback
 
                 # Check if backup name already exists
                 logger.info(f"Checking if backup table '{backup_name}' exists...")
                 if client.table_exists(backup_name):
                     logger.error(
-                        f"Backup table name '{backup_name}' already exists. Please choose a different name using --backup-table-name or remove the existing table."
+                        f"Backup table name '{backup_name}' already exists. Please choose a different name or remove the existing table."
                     )
+                    cleanup_temp_table()  # Clean up temp table
                     sys.exit(1)
                 logger.info(
                     f"Backup table '{backup_name}' does not exist. Proceeding with rename."
@@ -1070,58 +1206,63 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                 logger.info(
                     f"Renaming original table '{target_table}' to backup table '{backup_name}'..."
                 )
-                # QuestDB uses single quotes for table names in RENAME
-                safe_target_name = target_table.replace("'", "''")
-                safe_backup_name = backup_name.replace("'", "''")
-                rename_query = (
-                    f"RENAME TABLE '{safe_target_name}' TO '{safe_backup_name}';"
-                )
+                # Use single quotes for RENAME identifiers
+                rename_query = f"RENAME TABLE '{safe_target_table_quoted}' TO '{safe_backup_name_quoted}';"
                 try:
-                    response = client.exec(query=rename_query)
+                    response = client.exec(
+                        query=rename_query, statement_timeout=args.statement_timeout
+                    )
                     if isinstance(response, dict) and "error" in response:
+                        error_detail = response["error"]
+                        if "query" in response:
+                            error_detail += f" (Query: {response['query']})"
                         raise QuestDBAPIError(
-                            f"Failed to rename original table: {response['error']}"
+                            f"Failed to rename original table: {error_detail}"
                         )
                     logger.info(
                         f"Successfully renamed '{target_table}' to '{backup_name}'."
                     )
                     backup_created = True
-                    rollback_needed = (
-                        True  # Mark that rollback might be needed if create fails
-                    )
                 except QuestDBError as e:
                     logger.error(
                         f"Error renaming original table '{target_table}' to '{backup_name}': {e}"
                     )
-                    # Cannot proceed if rename fails
-                    sys.exit(1)
+                    rename_original_failed = True  # Mark failure for rollback check
+                    # Don't exit yet, attempt final rename, but report this error at the end
 
-        # --- 4. Create New Table ---
-        logger.info(f"Creating new table '{target_table}' from query...")
-        # QuestDB uses single quotes for table names in CREATE TABLE AS
-        safe_target_name_create = target_table.replace("'", "''")
-        create_parts = [
-            f"CREATE TABLE '{safe_target_name_create}' AS ({defining_query})"
-        ]
-        if args.timestamp:
-            # timestamp column name shouldn't need quotes normally
-            create_parts.append(f"TIMESTAMP({args.timestamp})")
-        if args.partitionBy:
-            # Partitioning strategy is an enum keyword, no quotes
-            create_parts.append(f"PARTITION BY {args.partitionBy}")
-
-        create_query = " ".join(create_parts) + ";"
-        logger.debug(f"Executing CREATE statement: {create_query}")
-
+        # --- 5. Rename Temporary Table to Target Table ---
+        logger.info(
+            f"Renaming temporary table '{temp_table_name}' to target table '{target_table}'..."
+        )
+        # Use single quotes for RENAME identifiers
+        rename_final_query = f"RENAME TABLE '{safe_temp_table_name_quoted}' TO '{safe_target_table_quoted}';"
         try:
-            response = client.exec(query=create_query)
+            response = client.exec(
+                query=rename_final_query, statement_timeout=args.statement_timeout
+            )
             if isinstance(response, dict) and "error" in response:
+                error_detail = response["error"]
+                if "query" in response:
+                    error_detail += f" (Query: {response['query']})"
                 raise QuestDBAPIError(
-                    f"Failed to create new table: {response['error']}"
+                    f"Failed to rename temporary table to target: {error_detail}",
+                    response_data=response,
                 )
-            logger.info(f"Successfully created new table '{target_table}'.")
 
-            # --- 5. Success Reporting ---
+            # If the original rename failed, report it now even if final rename succeeded
+            if rename_original_failed:
+                logger.error(
+                    f"!!! Previous error occurred: Failed to rename original table '{target_table}' to '{backup_name}'. The temporary table was still renamed to '{target_table}', potentially overwriting data if the original rename partially succeeded."
+                )
+                cleanup_temp_table()  # Temp table *should* be gone now, but try just in case
+                sys.exit(1)
+
+            logger.info(
+                f"Successfully renamed temporary table '{temp_table_name}' to '{target_table}'."
+            )
+            temp_table_created = False  # Mark temp table as successfully renamed/gone
+
+            # --- 6. Success Reporting ---
             success_message = f"Successfully created/replaced table '{target_table}'."
             if backup_created:
                 success_message += f" Original table backed up as '{backup_name}'."
@@ -1144,78 +1285,107 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
             )
             sys.exit(0)
 
-        except QuestDBError as create_err:
-            logger.error(f"Error creating new table '{target_table}': {create_err}")
-            rollback_needed = backup_created  # Rollback only needed if backup was made
+        except QuestDBError as final_rename_err:
+            logger.error(
+                f"Error renaming temporary table '{temp_table_name}' to '{target_table}': {final_rename_err}"
+            )
 
-            if rollback_needed:
+            # --- Rollback Attempt ---
+            if backup_created:
                 logger.warning("Attempting to roll back by renaming backup table...")
-                # Attempt to rename backup back to original
-                safe_target_name_rollback = target_table.replace("'", "''")
-                safe_backup_name_rollback = backup_name.replace("'", "''")
-                rollback_query = f"RENAME TABLE '{safe_backup_name_rollback}' TO '{safe_target_name_rollback}';"
+                # Use single quotes for RENAME identifiers
+                rollback_query = f"RENAME TABLE '{safe_backup_name_quoted}' TO '{safe_target_table_quoted}';"
                 try:
-                    response = client.exec(query=rollback_query)
+                    response = client.exec(
+                        query=rollback_query, statement_timeout=args.statement_timeout
+                    )
                     if isinstance(response, dict) and "error" in response:
                         logger.error(
                             f"!!! ROLLBACK FAILED: Could not rename '{backup_name}' back to '{target_table}': {response['error']}"
                         )
                         logger.error(
-                            "!!! The original table data might be in the backup table."
+                            f"!!! The original table data might be in the backup table: '{backup_name}'."
+                        )
+                        logger.error(
+                            f"!!! The new data might be in the temporary table: '{temp_table_name}'."
                         )
                     else:
                         logger.info(
                             f"Successfully rolled back: Renamed '{backup_name}' back to '{target_table}'."
                         )
+                        # Backup is restored, but temp table still exists
                 except QuestDBError as rollback_err:
                     logger.error(
                         f"!!! ROLLBACK FAILED: Error renaming '{backup_name}' back to '{target_table}': {rollback_err}"
                     )
                     logger.error(
-                        "!!! The original table data might be in the backup table."
+                        f"!!! The original table data might be in the backup table: '{backup_name}'."
                     )
+                    logger.error(
+                        f"!!! The new data might be in the temporary table: '{temp_table_name}'."
+                    )
+
             elif original_dropped_no_backup:
                 logger.error(
-                    "!!! Creation failed after original table was dropped (no backup). Cannot roll back."
+                    "!!! Final rename failed after original table was dropped (no backup)."
                 )
-            else:
                 logger.error(
-                    "!!! Creation failed. No rollback action was necessary as original table did not exist or was not modified."
+                    f"!!! The new data might be in the temporary table: '{temp_table_name}'."
+                )
+            elif rename_original_failed:
+                logger.error(
+                    f"!!! Final rename failed AND the previous attempt to rename the original table also failed."
+                )
+                logger.error(
+                    f"!!! State is uncertain. Original table '{target_table}' might still exist."
+                )
+                logger.error(
+                    f"!!! The new data might be in the temporary table: '{temp_table_name}'."
+                )
+            else:  # Original didn't exist or rename didn't happen
+                logger.error("!!! Final rename failed.")
+                logger.error(
+                    f"!!! The new data might be in the temporary table: '{temp_table_name}'."
                 )
 
-            sys.exit(1)  # Exit with error after handling creation failure
+            cleanup_temp_table()  # Attempt to remove the temp table regardless of rollback outcome
+            sys.exit(1)  # Exit with error after handling final rename failure
 
     except QuestDBError as e:
         logger.error(f"An unexpected QuestDB error occurred during the operation: {e}")
-        # Check if rollback is needed due to error during existence checks or rename checks
-        if rollback_needed and backup_created:
+        cleanup_temp_table()  # Attempt cleanup
+        # Check if state is inconsistent due to error before final rename
+        if (
+            backup_created and not temp_table_created
+        ):  # Error happened after backup rename but before/during final rename
             logger.error(
-                f"!!! An error occurred after the original table was renamed to '{backup_name}'. Manual check might be required."
+                f"!!! An error occurred after the original table was renamed to '{backup_name}'. Manual check required. Temporary table '{temp_table_name}' may or may not exist."
             )
         sys.exit(1)
     except KeyboardInterrupt:
         logger.info("\nOperation cancelled by user.")
-        # Check if state is inconsistent
-        if rollback_needed and backup_created:
+        cleanup_temp_table()  # Attempt cleanup
+        # Check state
+        if backup_created:
             logger.warning(
-                f"!!! Operation cancelled after the original table was renamed to '{backup_name}'. Manual check might be required."
+                f"!!! Operation cancelled. Original table might be renamed to '{backup_name}'. Temporary table '{temp_table_name}' might exist."
             )
-        elif original_dropped_no_backup:
+        elif temp_table_created:
             logger.warning(
-                f"!!! Operation cancelled after the original table was dropped (no backup)."
+                f"!!! Operation cancelled. Temporary table '{temp_table_name}' might exist."
             )
-
         sys.exit(130)
     except Exception as e:
         logger.exception(f"An unexpected error occurred: {e}")
-        # Check if state is inconsistent
-        if rollback_needed and backup_created:
+        cleanup_temp_table()  # Attempt cleanup
+        # Check state
+        if backup_created:
             logger.error(
-                f"!!! An unexpected error occurred after the original table was renamed to '{backup_name}'. Manual check might be required."
+                f"!!! An unexpected error occurred. Original table might be renamed to '{backup_name}'. Temporary table '{temp_table_name}' might exist."
             )
-        elif original_dropped_no_backup:
+        elif temp_table_created:
             logger.error(
-                f"!!! An unexpected error occurred after the original table was dropped (no backup)."
+                f"!!! An unexpected error occurred. Temporary table '{temp_table_name}' might exist."
             )
         sys.exit(1)
 
