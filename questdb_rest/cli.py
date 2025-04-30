@@ -13,7 +13,7 @@
 #     "./questdb_rest.py" # Include the library file as a dependency
 # ]
 # ///
-
+import uuid
 import argparse
 import html
 from typing import Any, Dict
@@ -86,6 +86,69 @@ def extract_statements_from_sql(sql_string: str) -> list[str]:
 # --------------------------------------
 
 # --- Dry Run Simulation Helpers ---
+
+
+def simulate_create_or_replace(args, query):
+    """Simulates the create-or-replace-table-from-query command."""
+    target_table = args.table
+    logger.info("[DRY-RUN] Simulating create-or-replace-table-from-query:")
+    logger.info(f"[DRY-RUN]   Target Table: '{target_table}'")
+    logger.info(
+        "[DRY-RUN]   Query Source: (provided via args/stdin)"
+    )  # Simplification for dry run
+
+    # Simulate checking if target table exists (assume it exists for backup simulation)
+    logger.info(
+        f"[DRY-RUN]   Checking if target table '{target_table}' exists... (Assuming Yes)"
+    )
+    original_exists = True  # Assume exists for simulation
+
+    backup_name = None
+    if original_exists:
+        if args.no_backup_original_table:
+            logger.info(
+                f"[DRY-RUN]   --no-backup-original-table specified. Will DROP original table '{target_table}' if it exists."
+            )
+            logger.info(f"[DRY-RUN]   Would execute: DROP TABLE '{target_table}';")
+        else:
+            if args.backup_table_name:
+                backup_name = args.backup_table_name
+                logger.info(f"[DRY-RUN]   Using provided backup name: '{backup_name}'")
+            else:
+                backup_name = f"qdb_cli_backup_{target_table}_{uuid.uuid4()}"[:250]
+                logger.info(f"[DRY-RUN]   Generated backup name: '{backup_name}'")
+            # Simulate checking if backup name exists (assume it doesn't)
+            logger.info(
+                f"[DRY-RUN]   Checking if backup table '{backup_name}' exists... (Assuming No)"
+            )
+            logger.info(
+                f"[DRY-RUN]   Would execute: RENAME TABLE '{target_table}' TO '{backup_name}';"
+            )
+
+    # Simulate CREATE TABLE AS statement construction
+    create_parts = [f"CREATE TABLE '{target_table}' AS ({query})"]
+    if args.timestamp:
+        create_parts.append(f"TIMESTAMP({args.timestamp})")
+    if args.partitionBy:
+        create_parts.append(f"PARTITION BY {args.partitionBy}")
+    create_statement = " ".join(create_parts) + ";"
+    logger.info(f"[DRY-RUN]   Would execute: {create_statement}")
+
+    # Simulate success response
+    print(
+        json.dumps(
+            {
+                "dry_run": True,
+                "operation": "create_or_replace_table_from_query",
+                "target_table": target_table,
+                "status": "OK (Simulated)",
+                "backup_table": backup_name,
+                "original_dropped_no_backup": original_exists
+                and args.no_backup_original_table,
+            },
+            indent=2,
+        )
+    )
 
 
 def simulate_imp(args, file_path, table_name, schema_source):
@@ -860,6 +923,303 @@ def handle_chk(args, client: QuestDBClient):
         sys.exit(130)
 
 
+def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
+    """
+    Handles the create-or-replace-table-from-query command.
+    Follows the safer Rename -> Create -> Optional Drop Backup pattern.
+    """
+    import importlib  # For query from module
+
+    target_table = args.table
+    logger.info(f"Starting create-or-replace operation for table '{target_table}'...")
+
+    # --- 1. Get SQL Query Content ---
+    sql_content = ""
+    source_description = ""
+    # Logic copied and adapted from handle_exec to get query input
+    if args.get_query_from_python_module:
+        try:
+            module_spec, sep, var_name = args.get_query_from_python_module.partition(
+                ":"
+            )
+            if not sep:
+                logger.error(
+                    "Invalid format for --get-query-from-python-module. Expected module_path:variable_name."
+                )
+                sys.exit(1)
+            sys.path.append(str(Path.cwd()))
+            logger.info(f"Importing module: {module_spec}")
+            mod = importlib.import_module(module_spec)
+            query_str = getattr(mod, var_name, None)
+            if not isinstance(query_str, str):
+                logger.error("The specified variable from module is not a string.")
+                sys.exit(1)
+            sql_content = query_str
+            source_description = args.get_query_from_python_module
+            logger.info(f"Loaded SQL from module variable: {source_description}")
+        except Exception as e:
+            logger.error(f"Error loading query from module: {e}")
+            sys.exit(1)
+    elif args.query:
+        sql_content = args.query
+        source_description = "query string"
+    elif args.file:
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                sql_content = f.read()
+            source_description = f"file '{args.file}'"
+        except IOError as e:
+            logger.warning(f"Error reading SQL file '{args.file}': {e}")
+            sys.exit(1)
+    elif not sys.stdin.isatty():
+        sql_content = sys.stdin.read()
+        source_description = "standard input"
+        if not sql_content:
+            logger.warning("Received empty input from stdin.")
+            sys.exit(1)
+    else:
+        logger.warning("No SQL query provided via argument, file, module, or stdin.")
+        sys.exit(1)
+
+    # Extract the *single* defining query (ensure it's not multiple statements)
+    try:
+        statements = extract_statements_from_sql(sql_content)
+        if len(statements) == 0:
+            raise ValueError("No SQL statements found in input.")
+        if len(statements) > 1:
+            logger.warning(
+                f"Multiple SQL statements found in {source_description}. Only the first statement will be used for CREATE TABLE AS."
+            )
+        defining_query = statements[0]
+        logger.info(f"Using query from {source_description} for table creation.")
+        logger.debug(
+            f"Query: {defining_query[:100]}{'...' if len(defining_query) > 100 else ''}"
+        )
+    except Exception as e:
+        logger.error(f"Failed to parse SQL from {source_description}: {e}")
+        sys.exit(1)
+
+    # --- Dry Run Check ---
+    if args.dry_run:
+        simulate_create_or_replace(args, defining_query)
+        sys.exit(0)
+
+    # --- Actual Execution ---
+    original_exists = False
+    backup_name = None
+    backup_created = False
+    original_dropped_no_backup = False
+    rollback_needed = False
+
+    try:
+        # --- 2. Check if target table exists ---
+        logger.info(f"Checking if target table '{target_table}' exists...")
+        original_exists = client.table_exists(target_table)
+        if original_exists:
+            logger.info(f"Target table '{target_table}' exists.")
+        else:
+            logger.info(
+                f"Target table '{target_table}' does not exist. Will proceed with creation."
+            )
+
+        # --- 3. Handle Existing Table (Backup/Drop) ---
+        if original_exists:
+            if args.no_backup_original_table:
+                # Drop the original table directly
+                logger.info(
+                    f"--no-backup-original-table specified. Dropping original table '{target_table}'..."
+                )
+                drop_query = f"DROP TABLE '{target_table}';"  # QuestDB uses single quotes for table names in DROP/RENAME
+                try:
+                    response = client.exec(query=drop_query)
+                    if isinstance(response, dict) and "error" in response:
+                        raise QuestDBAPIError(
+                            f"Failed to drop original table: {response['error']}"
+                        )
+                    logger.info(
+                        f"Successfully dropped original table '{target_table}'."
+                    )
+                    original_dropped_no_backup = True
+                except QuestDBError as e:
+                    logger.error(f"Error dropping original table '{target_table}': {e}")
+                    # Cannot proceed if drop fails
+                    sys.exit(1)
+            else:
+                # Determine backup name
+                if args.backup_table_name:
+                    backup_name = args.backup_table_name
+                    logger.info(f"Using provided backup name: '{backup_name}'")
+                else:
+                    # Use uuid for uniqueness and truncate
+                    gen_name = f"qdb_cli_backup_{target_table}_{uuid.uuid4()}"
+                    backup_name = gen_name[:250]  # QuestDB max identifier length is 255
+                    logger.info(f"Generated backup name: '{backup_name}'")
+
+                # Check if backup name already exists
+                logger.info(f"Checking if backup table '{backup_name}' exists...")
+                if client.table_exists(backup_name):
+                    logger.error(
+                        f"Backup table name '{backup_name}' already exists. Please choose a different name using --backup-table-name or remove the existing table."
+                    )
+                    sys.exit(1)
+                logger.info(
+                    f"Backup table '{backup_name}' does not exist. Proceeding with rename."
+                )
+
+                # Rename original to backup
+                logger.info(
+                    f"Renaming original table '{target_table}' to backup table '{backup_name}'..."
+                )
+                # QuestDB uses single quotes for table names in RENAME
+                safe_target_name = target_table.replace("'", "''")
+                safe_backup_name = backup_name.replace("'", "''")
+                rename_query = (
+                    f"RENAME TABLE '{safe_target_name}' TO '{safe_backup_name}';"
+                )
+                try:
+                    response = client.exec(query=rename_query)
+                    if isinstance(response, dict) and "error" in response:
+                        raise QuestDBAPIError(
+                            f"Failed to rename original table: {response['error']}"
+                        )
+                    logger.info(
+                        f"Successfully renamed '{target_table}' to '{backup_name}'."
+                    )
+                    backup_created = True
+                    rollback_needed = (
+                        True  # Mark that rollback might be needed if create fails
+                    )
+                except QuestDBError as e:
+                    logger.error(
+                        f"Error renaming original table '{target_table}' to '{backup_name}': {e}"
+                    )
+                    # Cannot proceed if rename fails
+                    sys.exit(1)
+
+        # --- 4. Create New Table ---
+        logger.info(f"Creating new table '{target_table}' from query...")
+        # QuestDB uses single quotes for table names in CREATE TABLE AS
+        safe_target_name_create = target_table.replace("'", "''")
+        create_parts = [
+            f"CREATE TABLE '{safe_target_name_create}' AS ({defining_query})"
+        ]
+        if args.timestamp:
+            # timestamp column name shouldn't need quotes normally
+            create_parts.append(f"TIMESTAMP({args.timestamp})")
+        if args.partitionBy:
+            # Partitioning strategy is an enum keyword, no quotes
+            create_parts.append(f"PARTITION BY {args.partitionBy}")
+
+        create_query = " ".join(create_parts) + ";"
+        logger.debug(f"Executing CREATE statement: {create_query}")
+
+        try:
+            response = client.exec(query=create_query)
+            if isinstance(response, dict) and "error" in response:
+                raise QuestDBAPIError(
+                    f"Failed to create new table: {response['error']}"
+                )
+            logger.info(f"Successfully created new table '{target_table}'.")
+
+            # --- 5. Success Reporting ---
+            success_message = f"Successfully created/replaced table '{target_table}'."
+            if backup_created:
+                success_message += f" Original table backed up as '{backup_name}'."
+            elif original_dropped_no_backup:
+                success_message += f" Original table was dropped (no backup)."
+            elif not original_exists:
+                success_message += " (Original table did not exist)."
+
+            print(
+                json.dumps(
+                    {
+                        "status": "OK",
+                        "message": success_message,
+                        "target_table": target_table,
+                        "backup_table": backup_name if backup_created else None,
+                        "original_dropped_no_backup": original_dropped_no_backup,
+                    },
+                    indent=2,
+                )
+            )
+            sys.exit(0)
+
+        except QuestDBError as create_err:
+            logger.error(f"Error creating new table '{target_table}': {create_err}")
+            rollback_needed = backup_created  # Rollback only needed if backup was made
+
+            if rollback_needed:
+                logger.warning("Attempting to roll back by renaming backup table...")
+                # Attempt to rename backup back to original
+                safe_target_name_rollback = target_table.replace("'", "''")
+                safe_backup_name_rollback = backup_name.replace("'", "''")
+                rollback_query = f"RENAME TABLE '{safe_backup_name_rollback}' TO '{safe_target_name_rollback}';"
+                try:
+                    response = client.exec(query=rollback_query)
+                    if isinstance(response, dict) and "error" in response:
+                        logger.error(
+                            f"!!! ROLLBACK FAILED: Could not rename '{backup_name}' back to '{target_table}': {response['error']}"
+                        )
+                        logger.error(
+                            "!!! The original table data might be in the backup table."
+                        )
+                    else:
+                        logger.info(
+                            f"Successfully rolled back: Renamed '{backup_name}' back to '{target_table}'."
+                        )
+                except QuestDBError as rollback_err:
+                    logger.error(
+                        f"!!! ROLLBACK FAILED: Error renaming '{backup_name}' back to '{target_table}': {rollback_err}"
+                    )
+                    logger.error(
+                        "!!! The original table data might be in the backup table."
+                    )
+            elif original_dropped_no_backup:
+                logger.error(
+                    "!!! Creation failed after original table was dropped (no backup). Cannot roll back."
+                )
+            else:
+                logger.error(
+                    "!!! Creation failed. No rollback action was necessary as original table did not exist or was not modified."
+                )
+
+            sys.exit(1)  # Exit with error after handling creation failure
+
+    except QuestDBError as e:
+        logger.error(f"An unexpected QuestDB error occurred during the operation: {e}")
+        # Check if rollback is needed due to error during existence checks or rename checks
+        if rollback_needed and backup_created:
+            logger.error(
+                f"!!! An error occurred after the original table was renamed to '{backup_name}'. Manual check might be required."
+            )
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("\nOperation cancelled by user.")
+        # Check if state is inconsistent
+        if rollback_needed and backup_created:
+            logger.warning(
+                f"!!! Operation cancelled after the original table was renamed to '{backup_name}'. Manual check might be required."
+            )
+        elif original_dropped_no_backup:
+            logger.warning(
+                f"!!! Operation cancelled after the original table was dropped (no backup)."
+            )
+
+        sys.exit(130)
+    except Exception as e:
+        logger.exception(f"An unexpected error occurred: {e}")
+        # Check if state is inconsistent
+        if rollback_needed and backup_created:
+            logger.error(
+                f"!!! An unexpected error occurred after the original table was renamed to '{backup_name}'. Manual check might be required."
+            )
+        elif original_dropped_no_backup:
+            logger.error(
+                f"!!! An unexpected error occurred after the original table was dropped (no backup)."
+            )
+        sys.exit(1)
+
+
 def explain_output_to_text(data: Dict[str, Any]) -> str:
     """Convert query plan dict to plain text output."""
     lines = [html.unescape(row[0]) for row in data.get("dataset", [])]
@@ -1152,6 +1512,10 @@ def detect_scheme_in_host(host_str):
 
 
 # --- Main Execution ---
+# questdb_rest/cli.py
+
+
+# --- Main Execution ---
 def main():
     parser = argparse.ArgumentParser(
         description="QuestDB REST API Command Line Interface.\nLogs to stderr, outputs data to stdout.\n\n"
@@ -1233,11 +1597,12 @@ Links:
         default=None,
     )
     # Shared stop-on-error argument for commands that process multiple items
+    # Note: create-or-replace implicitly stops on error due to its nature
     parser.add_argument(
         "--stop-on-error",
         action=argparse.BooleanOptionalAction,
         default=True,  # Default to stopping on error
-        help="Stop execution immediately if any item (file/statement/table) fails.",
+        help="Stop execution immediately if any item (file/statement/table) fails (where applicable).",
     )
 
     subparsers = parser.add_subparsers(
@@ -1282,7 +1647,7 @@ Links:
     )  # Default to empty string
 
     group_imp_table_name.add_argument(
-        "-D",
+        "-d",  # Reuse -d from imp for consistency, but different meaning
         "--dash-to-underscore",
         action="store_true",
         help="If table name is derived from filename (i.e., --name not set), convert dashes (-) to underscores (_). Compatible with --name-func.",
@@ -1302,7 +1667,7 @@ Links:
         "-s", "--schema", help="JSON schema string. Applied to ALL files. Use quotes."
     )
     parser_imp.add_argument(
-        "-P",
+        "-P",  # Keep -P for partitionBy
         "--partitionBy",
         choices=["NONE", "YEAR", "MONTH", "DAY", "HOUR", "WEEK"],
         help="Partitioning strategy (if table created).",
@@ -1324,7 +1689,9 @@ Links:
         help="Behavior on data errors during import.",
     )
     parser_imp.add_argument(
-        "-d", "--delimiter", help="Specify CSV delimiter character."
+        # Reuse -d from imp for delimiter
+        "--delimiter",
+        help="Specify CSV delimiter character.",
     )
     parser_imp.add_argument(
         "-F",
@@ -1345,13 +1712,13 @@ Links:
         help="Format for the response message to stdout.",
     )
     parser_imp.add_argument(
-        "-O",
+        "-O",  # Keep -O for o3MaxLag
         "--o3MaxLag",
         type=int,
         help="Set O3 max lag (microseconds, if table created).",
     )
     parser_imp.add_argument(
-        "-M",
+        "-M",  # Keep -M for maxUncommittedRows
         "--maxUncommittedRows",
         type=int,
         help="Set max uncommitted rows (if table created).",
@@ -1363,7 +1730,7 @@ Links:
         default=True,
         help="Automatically create table if it does not exist.",
     )
-    # --stop-on-error is now global
+    # --stop-on-error is global
     parser_imp.set_defaults(func=handle_imp)
 
     # --- EXEC Sub-command ---
@@ -1380,14 +1747,16 @@ Links:
         default=argparse.SUPPRESS,
         help="Show this help message and exit.",
     )
-    query_input_group = parser_exec.add_mutually_exclusive_group()
+    query_input_group = parser_exec.add_mutually_exclusive_group(
+        required=False
+    )  # Changed to False - stdin is implicit
     query_input_group.add_argument("-q", "--query", help="SQL query string to execute.")
     query_input_group.add_argument(
         "-f", "--file", help="Path to file containing SQL statements."
     )
     # New option: get query from python module (e.g. a_module.b_module:my_sql_statement)
     query_input_group.add_argument(
-        "-G",  # Changed short opt to avoid conflict with imp -P
+        "-G",  # Keep -G
         "--get-query-from-python-module",
         help="Get query from a Python module in the format 'module_path:variable_name'.",
     )
@@ -1397,7 +1766,7 @@ Links:
         help='Limit results (e.g., "10", "10,20"). Applies per statement.',
     )
     parser_exec.add_argument(
-        "-C",
+        "-C",  # Keep -C for count
         "--count",
         action=argparse.BooleanOptionalAction,
         help="Include row count in response.",
@@ -1409,19 +1778,19 @@ Links:
         help="Skip metadata in response.",
     )
     parser_exec.add_argument(
-        "-T",
+        "-T",  # Keep -T for timings
         "--timings",
         action=argparse.BooleanOptionalAction,
         help="Include execution timings.",
     )
     parser_exec.add_argument(
-        "-E",
+        "-E",  # Keep -E for explain
         "--explain",
         action=argparse.BooleanOptionalAction,
         help="Include execution plan details.",
     )
     parser_exec.add_argument(
-        "-Q",
+        "-Q",  # Keep -Q for quoteLargeNum
         "--quoteLargeNum",
         action=argparse.BooleanOptionalAction,
         help="Return LONG numbers as quoted strings.",
@@ -1440,29 +1809,30 @@ Links:
     group_query_modifier.add_argument(
         "--create-table",
         action="store_true",
-        help="Create a new table from the query result(s).",
+        help="Create a new table from the query result(s). Requires --new-table-name.",
     )
     group_query_modifier.add_argument(
         "--new-table-name",
         help="Name of the new table to create from query result(s). Required if --create-table is used.",
     )
-    # --stop-on-error is now global
+    # --stop-on-error is global
     # Output formatting options
     exec_format_group = parser_exec.add_mutually_exclusive_group()
     exec_format_group.add_argument(
-        "-1",  # Changed short opt to avoid conflict with imp -o
+        "-1",  # Keep -1 for --one
         "--one",
         action="store_true",
         help="Output only the value of the first column of the first row.",
     )
     exec_format_group.add_argument(
-        "-m",
+        "-m",  # Keep -m for markdown
         "--markdown",
         action="store_true",
         help="Display query result(s) in Markdown table format using tabulate.",
     )
     exec_format_group.add_argument(
-        "-P",  # Changed short opt to avoid conflict with global -p
+        # Keep -P (uppercase) for psql format, distinct from global -p password
+        "-P",
         "--psql",
         action="store_true",
         help="Display query result(s) in PostgreSQL table format using tabulate.",
@@ -1515,7 +1885,7 @@ Links:
     parser_chk.add_argument("table_name", help="Name of the table to check.")
     parser_chk.set_defaults(func=handle_chk)
 
-    # --- SCHEMA Sub-command (NEW) ---
+    # --- SCHEMA Sub-command ---
     parser_schema = subparsers.add_parser(
         "schema",
         help="Fetch CREATE TABLE statement(s) for one or more tables.",
@@ -1543,7 +1913,7 @@ Links:
     # --- RENAME Sub-command ---
     parser_rename = subparsers.add_parser(
         "rename",
-        help="Rename a table using ALTER TABLE RENAME TO.",
+        help="Rename a table using RENAME TABLE.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         add_help=False,
     )
@@ -1562,6 +1932,72 @@ Links:
         help="Query timeout in milliseconds.",
     )
     parser_rename.set_defaults(func=handle_rename)
+
+    # --- CREATE-OR-REPLACE Sub-command (NEW) ---
+    parser_cor = subparsers.add_parser(
+        "create-or-replace-table-from-query",
+        aliases=["cor"],  # Add alias
+        help="Atomically replace a table with the result of a query, with optional backup.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        add_help=False,
+    )
+    parser_cor.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help="Show this help message and exit.",
+    )
+    parser_cor.add_argument(
+        "table", help="Name of the target table to create or replace."
+    )
+    # Query input (copied from exec)
+    query_input_group_cor = parser_cor.add_mutually_exclusive_group(required=False)
+    query_input_group_cor.add_argument(
+        "-q", "--query", help="SQL query string defining the new table content."
+    )
+    query_input_group_cor.add_argument(
+        "-f", "--file", help="Path to file containing the SQL query."
+    )
+    query_input_group_cor.add_argument(
+        "-G",
+        "--get-query-from-python-module",
+        help="Get query from a Python module (format 'module_path:variable_name').",
+    )
+    # Backup options
+    backup_group = parser_cor.add_argument_group(
+        "Backup Options (if target table exists)"
+    )
+    backup_opts_exclusive = backup_group.add_mutually_exclusive_group()
+    backup_opts_exclusive.add_argument(
+        "-B",
+        "--backup-table-name",
+        "--rename-original-table-to",
+        dest="backup_table_name",  # Ensure consistent dest
+        help="Specify a name for the backup table (if target exists). Default: generated name.",
+    )
+    backup_opts_exclusive.add_argument(
+        "--no-backup-original-table",
+        action="store_true",
+        help="DROP the original table directly instead of renaming it to a backup.",
+    )
+    # Create options (copied from imp)
+    create_opts_group = parser_cor.add_argument_group("New Table Creation Options")
+    create_opts_group.add_argument(
+        "-P",
+        "--partitionBy",
+        choices=["NONE", "YEAR", "MONTH", "DAY", "HOUR", "WEEK"],
+        help="Partitioning strategy for the new table.",
+    )
+    create_opts_group.add_argument(
+        "-t", "--timestamp", help="Designated timestamp column name for the new table."
+    )
+    parser_cor.add_argument(
+        "--statement-timeout",  # Allow timeout for underlying DDL/query
+        type=int,
+        help="Query timeout in milliseconds for underlying operations.",
+    )
+    parser_cor.set_defaults(func=handle_create_or_replace_table_from_query)
 
     # --- GEN-CONFIG Sub-command ---
     parser_gen_config = subparsers.add_parser(
@@ -1587,10 +2023,13 @@ Links:
         if not hasattr(args, "requires_client"):
             args.requires_client = True
 
+    except SystemExit as e:  # Catch argparse errors specifically
+        # Argparse already prints help/errors, just exit
+        sys.exit(e.code if e.code is not None else 1)
     except Exception as e:
         parser.print_usage(sys.stderr)
         logger.error(f"Argument parsing error: {e}")
-        sys.exit(2)
+        sys.exit(2)  # Use exit code 2 for CLI usage errors
 
     # Set logging level based on args
     log_level = logging.WARNING
@@ -1607,12 +2046,17 @@ Links:
     # Ensure library logs go to stderr if handler not already present
     if not library_logger.hasHandlers():
         handler = logging.StreamHandler(sys.stderr)
+        # Match the CLI's formatter for consistency
         formatter = logging.Formatter(
-            "%(name)s %(levelname)s: %(message)s"
-        )  # Simpler format for library
+            "%(levelname)s: %(message)s"  # Simpler format like CLI logger
+        )
         handler.setFormatter(formatter)
         library_logger.addHandler(handler)
 
+    if (
+        log_level <= logging.INFO
+    ):  # Print info/debug startup messages only if level appropriate
+        logger.info(f"Log level set to {logging.getLevelName(log_level)}")
     if log_level == logging.DEBUG:
         logger.debug("Debug logging enabled for CLI and library.")
 
@@ -1651,7 +2095,8 @@ Links:
         # Prompt if password wasn't loaded from config
         if actual_password is None:  # Check again after attempting config load
             try:
-                actual_password = getpass(f"Password for user '{args.user}': ")
+                prompt_str = f"Password for user '{args.user}' at {args.host or 'default host'}: "
+                actual_password = getpass(prompt_str)
                 if not actual_password:  # Handle empty input during prompt
                     logger.warning("Password required but not provided.")
                     sys.exit(1)
@@ -1674,6 +2119,20 @@ Links:
         if args.name and args.dash_to_underscore:
             # This warning is now also handled inside handle_imp for clarity per file
             pass
+    elif args.command == "exec":
+        # Check if create-table is used without new-table-name
+        if args.create_table and not args.new_table_name:
+            parser_exec.error("--new-table-name is required when using --create-table.")
+        # Check if query source is missing (stdin check happens in handler)
+        if (
+            not args.query
+            and not args.file
+            and not args.get_query_from_python_module
+            and sys.stdin.isatty()
+        ):
+            parser_exec.error(
+                "No SQL query provided via --query, --file, --get-query-from-python-module, or stdin."
+            )
 
     # --- Instantiate Client (if needed and not dry run) ---
     client = None
@@ -1682,6 +2141,8 @@ Links:
             # Check if host already contains a scheme
             detected_scheme = None
             actual_host = args.host
+            final_scheme = args.scheme  # Start with CLI arg scheme
+
             if args.host:
                 detected_scheme, actual_host = detect_scheme_in_host(args.host)
                 if detected_scheme:
@@ -1689,8 +2150,8 @@ Links:
                         f"Detected scheme '{detected_scheme}://' in host parameter: '{args.host}'"
                     )
                     # Override scheme if detected in host, unless explicitly provided via --scheme
-                    if not args.scheme:
-                        args.scheme = detected_scheme
+                    if final_scheme is None:  # Only override if --scheme wasn't given
+                        final_scheme = detected_scheme
 
             client_kwargs = {
                 "host": actual_host,  # Use the host without scheme
@@ -1698,7 +2159,7 @@ Links:
                 "user": args.user,
                 "password": actual_password,  # Use potentially prompted/config password
                 "timeout": args.timeout,
-                "scheme": args.scheme,
+                "scheme": final_scheme,  # Use the finally decided scheme
             }
             # Filter out None values so client uses its defaults/config loading
             filtered_kwargs = {k: v for k, v in client_kwargs.items() if v is not None}
@@ -1706,7 +2167,7 @@ Links:
             if args.config:
                 # If a specific config file is given via --config, use from_config_file
                 # We prioritize command-line args over the config file if both are present.
-                # Let's use from_config_file first, then override with CLI args.
+                # Use from_config_file first, then override with CLI args.
                 try:
                     logger.info(
                         f"Loading configuration from specified file: {args.config}"
@@ -1715,49 +2176,41 @@ Links:
                     base_client = QuestDBClient.from_config_file(args.config)
 
                     # Prepare overrides from CLI args (only if they were actually provided)
-                    cli_overrides = {}
-                    if args.host is not None:
-                        cli_overrides["host"] = args.host
-                    if args.port is not None:
-                        cli_overrides["port"] = args.port
-                    if args.user is not None:
-                        cli_overrides["user"] = args.user
-                    # Use actual_password which includes prompted/cli password if applicable
-                    if args.user is not None or args.password is not None:
-                        cli_overrides["password"] = actual_password
-                    if args.timeout is not None:
-                        cli_overrides["timeout"] = args.timeout
-                    if args.scheme is not None:
-                        cli_overrides["scheme"] = args.scheme
+                    # Use filtered_kwargs which already has the resolved CLI args + password + scheme
+                    # Get the base client's values to compare
+                    base_url_parts = base_client.base_url.split("://")
+                    base_scheme = base_url_parts[0]
+                    host_port_parts = base_url_parts[1].split(":")
+                    base_host = host_port_parts[0]
+                    base_port = (
+                        int(host_port_parts[1].split("/")[0])
+                        if len(host_port_parts) > 1
+                        else QuestDBClient.DEFAULT_PORT
+                    )  # Adjust if needed
+                    base_user = base_client.auth[0] if base_client.auth else None
+                    base_password = base_client.auth[1] if base_client.auth else None
+                    base_timeout = base_client.timeout
 
-                    # Update the base client settings with CLI overrides
-                    final_kwargs = {
-                        "host": cli_overrides.get(
-                            "host", base_client.base_url.split("://")[1].split(":")[0]
-                        ),
-                        "port": cli_overrides.get(
-                            "port",
-                            int(base_client.base_url.split(":")[-1].split("/")[0]),
-                        ),
-                        "user": cli_overrides.get(
-                            "user", base_client.auth[0] if base_client.auth else None
-                        ),
-                        "password": cli_overrides.get(
-                            "password",
-                            base_client.auth[1] if base_client.auth else None,
-                        ),
-                        "timeout": cli_overrides.get("timeout", base_client.timeout),
-                        "scheme": cli_overrides.get(
-                            "scheme", base_client.base_url.split("://")[0]
-                        ),
+                    # Build final kwargs prioritizing CLI args (already in filtered_kwargs) over config file
+                    final_kwargs_from_config = {
+                        "host": filtered_kwargs.get("host", base_host),
+                        "port": filtered_kwargs.get("port", base_port),
+                        "user": filtered_kwargs.get("user", base_user),
+                        "password": filtered_kwargs.get("password", base_password),
+                        "timeout": filtered_kwargs.get("timeout", base_timeout),
+                        "scheme": filtered_kwargs.get("scheme", base_scheme),
                     }
-                    client = QuestDBClient(**final_kwargs)
+
+                    client = QuestDBClient(**final_kwargs_from_config)
                     logger.debug(
-                        f"Client initialized from {args.config} and updated with CLI args."
+                        f"Client initialized from {args.config} and potentially updated with CLI args."
                     )
 
                 except FileNotFoundError:
                     logger.error(f"Config file not found: {args.config}")
+                    sys.exit(1)
+                except (json.JSONDecodeError, KeyError) as conf_err:
+                    logger.error(f"Error parsing config file {args.config}: {conf_err}")
                     sys.exit(1)
                 except Exception as conf_err:
                     logger.error(f"Error loading config file {args.config}: {conf_err}")
@@ -1766,9 +2219,18 @@ Links:
             else:
                 # Standard initialization: uses CLI args > ~/.questdb-rest/config.json > defaults
                 logger.debug(
-                    "Initializing client using command-line arguments and default config."
+                    "Initializing client using command-line arguments and/or default config (~/.questdb-rest/config.json)."
                 )
                 client = QuestDBClient(**filtered_kwargs)
+
+            # Log final connection details (mask password)
+            log_host = client.base_url.split("://")[1].split(":")[0]
+            log_port = int(client.base_url.split(":")[-1].split("/")[0])
+            log_scheme = client.base_url.split("://")[0]
+            log_user_info = f" as user '{client.auth[0]}'" if client.auth else ""
+            logger.info(
+                f"Connecting to {log_scheme}://{log_host}:{log_port}{log_user_info}"
+            )
 
         except (QuestDBError, ValueError) as e:
             logger.error(f"Failed to initialize QuestDB client: {e}")
@@ -1781,7 +2243,7 @@ Links:
 
     # Call the appropriate handler function
     try:
-        # Pass the client instance (or None) and args to the handler
+        # Pass the client instance (or None for dry run/gen-config) and args to the handler
         args.func(args, client)
     except KeyboardInterrupt:
         logger.info("\nOperation cancelled by user.")
@@ -1789,9 +2251,13 @@ Links:
     except SystemExit as e:
         # Allow sys.exit calls from handlers to propagate
         sys.exit(e.code)
+    except (QuestDBConnectionError, QuestDBAPIError, QuestDBError) as e:
+        # Catch specific client errors that might not be caught in handlers
+        logger.error(f"QuestDB Error: {e}")
+        sys.exit(1)
     except Exception as e:
         # Catch-all for unexpected errors in command handlers
-        logger.exception(
+        logger.exception(  # Use exception to log traceback for unexpected errors
             f"An unexpected error occurred during command '{args.command}': {e}"
         )
         sys.exit(1)
@@ -1804,7 +2270,11 @@ if __name__ == "__main__":
 
         install()
     except ImportError:  # icecream not installed
-        pass
+
+        def ic(*args):  # Define a dummy ic function
+            return args[0] if args else None
+
+        pass  # Keep native Python logging
 
     try:
         main()
@@ -1812,5 +2282,8 @@ if __name__ == "__main__":
         sys.exit(e.code)
     except Exception as e:
         # Final fallback
-        logger.exception(f"An unexpected error occurred at the top level: {e}")
+        import traceback
+
+        print(f"An unexpected error occurred at the top level: {e}", file=sys.stderr)
+        traceback.print_exc()  # Print traceback for unexpected top-level errors
         sys.exit(1)
