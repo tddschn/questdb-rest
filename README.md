@@ -139,6 +139,8 @@ $ qdb-cli rename trips taxi_trips_feb_2018
     - [`chk`](#chk)
   - [Usage](#usage)
     - [Global options to fine tune log levels](#global-options-to-fine-tune-log-levels)
+  - [Subcommands that run complex workflows](#subcommands-that-run-complex-workflows)
+    - [`create-or-replace-table-from-query` or `cor`](#create-or-replace-table-from-query-or-cor)
     - [Configuring CLI - DB connection options](#configuring-cli---db-connection-options)
     - [Accompanying Bash Scripts](#accompanying-bash-scripts)
   - [Examples](#examples)
@@ -260,6 +262,79 @@ options:
                         Stop execution immediately if any item (file/statement/table) fails.
 ```
 
+## Subcommands that run complex workflows
+
+### `create-or-replace-table-from-query` or `cor`
+
+QuestDB doesn't have `DELETE FROM` to delete rows, you can only create a new table and drop the old one. This command does that for you, and optionally backs up the old table.
+
+It does complex checks to ensure the queries are correctly constructed and are run in the correct order.
+
+One of the query that will be executed is `CREATE TABLE IF NOT EXISTS <table> AS <query>`.
+
+
+```plain
+qdb-cli cor --help
+
+usage: questdb-cli create-or-replace-table-from-query [-h] [-q QUERY | -f FILE | -G GET_QUERY_FROM_PYTHON_MODULE] [-B BACKUP_TABLE_NAME | --no-backup-original-table] [-P {NONE,YEAR,MONTH,DAY,HOUR,WEEK}] [-t TIMESTAMP]
+                                                      [--statement-timeout STATEMENT_TIMEOUT]
+                                                      table
+
+positional arguments:
+  table                 Name of the target table to create or replace.
+
+options:
+  -h, --help            Show this help message and exit.
+  -q QUERY, --query QUERY
+                        SQL query string defining the new table content.
+  -f FILE, --file FILE  Path to file containing the SQL query.
+  -G GET_QUERY_FROM_PYTHON_MODULE, --get-query-from-python-module GET_QUERY_FROM_PYTHON_MODULE
+                        Get query from a Python module (format 'module_path:variable_name').
+  --statement-timeout STATEMENT_TIMEOUT
+                        Query timeout in milliseconds for underlying operations.
+
+Backup Options (if target table exists):
+  -B BACKUP_TABLE_NAME, --backup-table-name BACKUP_TABLE_NAME, --rename-original-table-to BACKUP_TABLE_NAME
+                        Specify a name for the backup table (if target exists). Default: generated name.
+  --no-backup-original-table
+                        DROP the original table directly instead of renaming it to a backup.
+
+New Table Creation Options:
+  -P {NONE,YEAR,MONTH,DAY,HOUR,WEEK}, --partitionBy {NONE,YEAR,MONTH,DAY,HOUR,WEEK}
+                        Partitioning strategy for the new table.
+  -t TIMESTAMP, --timestamp TIMESTAMP
+                        Designated timestamp column name for the new table.
+```
+
+```plain
+# oh snap! I inserted wrong PLTR data to the equities_1 table, the timestamp col is messed up
+# let's fix it by creating a new table with the correct data
+
+qdb-cli --info cor equities_1 -q "equities_1 where ticker != 'PLTR'" -t timestamp -P WEEK
+INFO: Log level set to INFO
+INFO: Connecting to http://localhost:3900
+INFO: Starting create-or-replace operation for table 'equities_1' using temp table '__qdb_cli_temp_equities_1_26b1ac1a_5853_4215_b9b0_aa9b872c1f7b'...
+WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
+WARNING: Query: equities_1 where ticker != 'PLTR'
+INFO: Using query from query string for table creation.
+INFO: Creating temporary table '__qdb_cli_temp_equities_1_26b1ac1a_5853_4215_b9b0_aa9b872c1f7b' from query...
+INFO: Successfully created temporary table '__qdb_cli_temp_equities_1_26b1ac1a_5853_4215_b9b0_aa9b872c1f7b'.
+INFO: Checking if target table 'equities_1' exists...
+INFO: Generated backup name: 'qdb_cli_backup_equities_1_bc345051_9157_4e3c_83ec_70e8430a3f64'
+INFO: Checking if backup table 'qdb_cli_backup_equities_1_bc345051_9157_4e3c_83ec_70e8430a3f64' exists...
+INFO: Backup table 'qdb_cli_backup_equities_1_bc345051_9157_4e3c_83ec_70e8430a3f64' does not exist. Proceeding with rename.
+INFO: Renaming original table 'equities_1' to backup table 'qdb_cli_backup_equities_1_bc345051_9157_4e3c_83ec_70e8430a3f64'...
+INFO: Successfully renamed 'equities_1' to 'qdb_cli_backup_equities_1_bc345051_9157_4e3c_83ec_70e8430a3f64'.
+INFO: Renaming temporary table '__qdb_cli_temp_equities_1_26b1ac1a_5853_4215_b9b0_aa9b872c1f7b' to target table 'equities_1'...
+INFO: Successfully renamed temporary table '__qdb_cli_temp_equities_1_26b1ac1a_5853_4215_b9b0_aa9b872c1f7b' to 'equities_1'.
+{
+  "status": "OK",
+  "message": "Successfully created/replaced table 'equities_1'. Original table backed up as 'qdb_cli_backup_equities_1_bc345051_9157_4e3c_83ec_70e8430a3f64'.",
+  "target_table": "equities_1",
+  "backup_table": "qdb_cli_backup_equities_1_bc345051_9157_4e3c_83ec_70e8430a3f64",
+  "original_dropped_no_backup": false
+}
+```
 
 ### Configuring CLI - DB connection options
 
