@@ -139,11 +139,12 @@ $ qdb-cli rename trips taxi_trips_feb_2018
     - [`chk`](#chk)
   - [Usage](#usage)
     - [Global options to fine tune log levels](#global-options-to-fine-tune-log-levels)
+    - [Configuring CLI - DB connection options](#configuring-cli---db-connection-options)
+    - [Accompanying Bash Scripts](#accompanying-bash-scripts)
   - [Subcommands that run complex workflows](#subcommands-that-run-complex-workflows)
     - [`create-or-replace-table-from-query` or `cor`](#create-or-replace-table-from-query-or-cor)
     - [`rename` with table exists checks](#rename-with-table-exists-checks)
-    - [Configuring CLI - DB connection options](#configuring-cli---db-connection-options)
-    - [Accompanying Bash Scripts](#accompanying-bash-scripts)
+    - [`dedupe` check, enable, disable](#dedupe-check-enable-disable)
   - [Examples](#examples)
     - [Advanced Scripting](#advanced-scripting)
   - [PyPI packages and installation](#pypi-packages-and-installation)
@@ -231,12 +232,16 @@ qdb-cli -h
 usage: questdb-cli [-h] [-H HOST] [--port PORT] [-u USER] [-p PASSWORD]
                    [--timeout TIMEOUT] [--scheme {http,https}] [-i | -D] [-R]
                    [--config CONFIG] [--stop-on-error | --no-stop-on-error]
-                   {imp,exec,exp,chk,schema,gen-config} ...
+                   {imp,exec,exp,chk,schema,rename,create-or-replace-table-from-query,cor,drop,drop-table,dedupe,gen-config}
+                   ...
+
 QuestDB REST API Command Line Interface.
 Logs to stderr, outputs data to stdout.
+
 Uses QuestDB REST API via questdb_rest library.
+
 positional arguments:
-  {imp,exec,exp,chk,schema,gen-config}
+  {imp,exec,exp,chk,schema,rename,create-or-replace-table-from-query,cor,drop,drop-table,dedupe,gen-config}
                         Available sub-commands
     imp                 Import data from file(s) using /imp.
     exec                Execute SQL statement(s) using /exec (returns JSON).
@@ -244,7 +249,13 @@ positional arguments:
     exp                 Export data using /exp (returns CSV to stdout or file).
     chk                 Check if a table exists using /chk (returns JSON). Exit code 0 if exists, 3 if not.
     schema              Fetch CREATE TABLE statement(s) for one or more tables.
+    rename              Rename a table using RENAME TABLE. Backs up target name by default if it exists.
+    create-or-replace-table-from-query (cor)
+                        Atomically replace a table with the result of a query, with optional backup.
+    drop (drop-table)   Drop one or more tables using DROP TABLE.
+    dedupe              Enable, disable, or check data deduplication settings for a WAL table.
     gen-config          Generate a default config file at ~/.questdb-rest/config.json
+
 options:
   -h, --help            Show this help message and exit.
   -H HOST, --host HOST  QuestDB server host.
@@ -260,7 +271,30 @@ options:
   -R, --dry-run         Simulate API calls without sending them. Logs intended actions.
   --config CONFIG       Path to a specific config JSON file (overrides default ~/.questdb-rest/config.json).
   --stop-on-error, --no-stop-on-error
-                        Stop execution immediately if any item (file/statement/table) fails.
+                        Stop execution immediately if any item (file/statement/table) fails (where applicable).
+
+This CLI can also be used as a Python library.
+```
+
+### Configuring CLI - DB connection options
+
+Run `qdb-cli gen-config` and edit the generated config file to specify your DB's port, host, and auth info.
+
+All options are optional and will use the default `localhost:9000` if not specified.
+
+### Accompanying Bash Scripts
+
+```plain
+# check next section too
+$ qdb-drop-tables-by-regex 
+
+Usage: ~/.local/bin/qdb-drop-tables-by-regex [-n] [-c] -p PATTERN
+
+Options:
+  -p PATTERN   Regex pattern to match table names (required)
+  -n           Dry run; show what would be dropped but do not execute
+  -c           Confirm each drop interactively
+  -h           Show this help message
 ```
 
 ## Subcommands that run complex workflows
@@ -395,25 +429,81 @@ qdb chk qdb_cli_backup_trades3_f652d5ac_b9dd_4561_a835_eae947866e4f
 }
 ```
 
-### Configuring CLI - DB connection options
+### `dedupe` check, enable, disable
 
-Run `qdb-cli gen-config` and edit the generated config file to specify your DB's port, host, and auth info.
 
-All options are optional and will use the default `localhost:9000` if not specified.
+Usage:
 
-### Accompanying Bash Scripts
+Default is `--check`.
+
+This command parses the `CREATE TABLE` statement to get the `UPSERT KEYS` and `DESIGNATED TIMESTAMP` columns for you.
 
 ```plain
-# check next section too
-$ qdb-drop-tables-by-regex 
+❯ qdb-cli dedupe trades --help
+usage: questdb-cli dedupe [-h] [--enable | --disable | --check] [-k COLUMN [COLUMN ...]] [--statement-timeout STATEMENT_TIMEOUT] table_name
 
-Usage: ~/.local/bin/qdb-drop-tables-by-regex [-n] [-c] -p PATTERN
+positional arguments:
+  table_name            Name of the target WAL table.
 
-Options:
-  -p PATTERN   Regex pattern to match table names (required)
-  -n           Dry run; show what would be dropped but do not execute
-  -c           Confirm each drop interactively
-  -h           Show this help message
+options:
+  -h, --help            Show this help message and exit.
+  --enable              Enable deduplication. Requires --upsert-keys. (default: False)
+  --disable             Disable deduplication. (default: False)
+  --check               Check current deduplication status and keys (default action). (default: False)
+  -k COLUMN [COLUMN ...], --upsert-keys COLUMN [COLUMN ...]
+                        List of column names to use as UPSERT KEYS when enabling. Must include the designated timestamp. (default: None)
+  --statement-timeout STATEMENT_TIMEOUT
+                        Query timeout in milliseconds for the ALTER TABLE statement. (default: None)
+```
+
+Example:
+
+```plain
+# trades table is the same as the one in the demo instance
+qdb-cli dedupe trades
+{
+  "status": "OK",
+  "table_name": "trades",
+  "action": "check",
+  "deduplication_enabled": true,
+  "designated_timestamp": "timestamp",
+  "upsert_keys": [
+    "timestamp",
+    "symbol"
+  ]
+}
+❯ qdb-cli dedupe trades --disable
+{
+  "status": "OK",
+  "table_name": "trades",
+  "action": "disable",
+  "deduplication_enabled": false,
+  "ddl": "OK"
+}
+❯ qdb-cli dedupe trades --enable -k timestamp,symbol
+ERROR: Error: Designated timestamp column 'timestamp' must be included in --upsert-keys.
+{
+  "status": "Error",
+  "table_name": "trades",
+  "action": "enable",
+  "message": "Designated timestamp column 'timestamp' must be included in upsert keys.",
+  "provided_keys": [
+    "timestamp,symbol"
+  ]
+}
+[1]    47734 exit 1     questdb-cli dedupe trades --enable -k timestamp,symbol
+❯ qdb-cli dedupe trades --enable -k timestamp symbol
+{
+  "status": "OK",
+  "table_name": "trades",
+  "action": "enable",
+  "deduplication_enabled": true,
+  "upsert_keys": [
+    "timestamp",
+    "symbol"
+  ],
+  "ddl": "OK"
+}
 ```
 
 ## Examples
