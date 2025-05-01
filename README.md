@@ -150,6 +150,7 @@ $ qdb-cli rename trips taxi_trips_feb_2018
   - [PyPI packages and installation](#pypi-packages-and-installation)
   - [The Python API](#the-python-api)
   - [Screenshots](#screenshots)
+  - [Stats](#stats)
 
 ## How's this different from the official `py-questdb-client` and `py-questdb-query` packages?
 
@@ -563,3 +564,11 @@ QuestDBClient
 ![CleanShot-2025-03-30-16.32.44](https://g.teddysc.me/tddschn/16651cccc351b1d2742a4bddaee1c62d/CleanShot-2025-03-30-16.32.44_base64.txt?b)
 ![CleanShot-2025-03-30-16.33.18](https://g.teddysc.me/tddschn/16651cccc351b1d2742a4bddaee1c62d/CleanShot-2025-03-30-16.33.18_base64.txt?b)
 ![CleanShot-2025-03-30-16.33.36](https://g.teddysc.me/tddschn/16651cccc351b1d2742a4bddaee1c62d/CleanShot-2025-03-30-16.33.36_base64.txt?b)
+
+## Stats
+
+LOC by file:
+
+![](https://g.teddysc.me/d149da246628052d4550f3f0baa41dd5?b)
+
+Interactive: https://g.teddysc.me/511ceb311b59770268a709a589ce4fef
