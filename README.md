@@ -572,6 +572,8 @@ QuestDBClient
 
 Below are updated for version 3.0.3.
 
+See also https://teddysc.me/blog/code-stats-visualization
+
 ### LOC by file
 
 ![](https://g.teddysc.me/d149da246628052d4550f3f0baa41dd5?b)
