@@ -24,6 +24,7 @@ from getpass import getpass
 from pathlib import Path
 from typing import Callable, Dict, Any, Tuple
 import os  # ensure os is imported
+import re
 
 # Import the client and exceptions from the library
 from questdb_rest import (
@@ -99,10 +100,96 @@ def simulate_drop(args, table_name, index, total):
     )
 
 
+def _get_schema_and_dedup_info(
+    client: QuestDBClient, table_name: str, safe_table_name_quoted: str
+) -> Dict[str, Any]:
+    """Fetches and parses schema and deduplication info for a table."""
+    result = {
+        "exists": False,
+        "is_dedup_enabled": False,
+        "upsert_keys": None,
+        "designated_timestamp": None,
+        "create_statement": None,
+        "error": None,
+    }
+
+    try:
+        # 1. Check existence and current dedup status
+        dedup_status_query = (
+            f"SELECT dedup FROM tables() WHERE table_name = '{safe_table_name_quoted}'"
+        )
+        dedup_status_response = client.exec(query=dedup_status_query)
+
+        if dedup_status_response.get("count", 0) == 0:
+            result["error"] = "Table not found."
+            return result
+        result["exists"] = True
+        result["is_dedup_enabled"] = dedup_status_response["dataset"][0][0]
+
+        # 2. Fetch CREATE TABLE statement
+        # Use double quotes for SHOW CREATE TABLE identifier as per QuestDB syntax
+        safe_table_name_double_quoted = table_name.replace('"', '""')
+        schema_query = f'SHOW CREATE TABLE "{safe_table_name_double_quoted}";'
+        schema_response = client.exec(query=schema_query)
+
+        if isinstance(schema_response, dict) and "error" in schema_response:
+            raise QuestDBAPIError(
+                f"Failed to fetch schema: {schema_response['error']}",
+                response_data=schema_response,
+            )
+
+        if (
+            isinstance(schema_response, dict)
+            and schema_response.get("count", 0) > 0
+            and len(schema_response["dataset"]) > 0
+            and len(schema_response["dataset"][0]) > 0
+        ):
+            result["create_statement"] = schema_response["dataset"][0][0]
+        else:
+            result["error"] = "Could not retrieve CREATE TABLE statement."
+            return result  # Cannot parse further
+
+        # 3. Parse CREATE TABLE statement
+        create_statement = result["create_statement"]
+
+        # Parse Designated Timestamp (TIMESTAMP(...))
+        ts_match = re.search(
+            r"TIMESTAMP\s*\(([^)]+)\)", create_statement, re.IGNORECASE
+        )
+        if ts_match:
+            # Strip potential quotes if column name was quoted, handle case
+            result["designated_timestamp"] = ts_match.group(1).strip("\"`'")
+
+        # Parse Upsert Keys (DEDUP UPSERT KEYS(...)) - only relevant if currently enabled
+        if result["is_dedup_enabled"]:
+            keys_match = re.search(
+                r"DEDUP UPSERT KEYS\s*\(([^)]+)\)", create_statement, re.IGNORECASE
+            )
+            if keys_match:
+                keys_str = keys_match.group(1)
+                # Split by comma, strip whitespace and potential quotes
+                result["upsert_keys"] = [
+                    key.strip().strip("\"`'") for key in keys_str.split(",")
+                ]
+            else:
+                # Should not happen if is_dedup_enabled is true, but handle defensively
+                logger.warning(
+                    f"Deduplication reported enabled for '{table_name}', but DEDUP clause not found in schema. Schema might be inconsistent or parsing failed."
+                )
+                result["upsert_keys"] = []  # Indicate keys couldn't be parsed
+
+    except (QuestDBError, IndexError, KeyError, TypeError) as e:
+        result["error"] = f"Failed to get table/schema info: {e}"
+
+    return result
+
+
 def handle_dedupe(args, client: QuestDBClient):
     """Handles the dedupe command for enabling/disabling/checking deduplication."""
     table_name = args.table_name
-    safe_table_name_quoted = table_name.replace("'", "''")  # Quote for queries
+    safe_table_name_quoted = table_name.replace(
+        "'", "''"
+    )  # Quote for queries like ALTER
 
     # --- Dry Run Check ---
     if args.dry_run:
@@ -118,55 +205,36 @@ def handle_dedupe(args, client: QuestDBClient):
     logger.info(f"Performing dedupe action '{action}' for table '{table_name}'...")
 
     try:
-        # --- Pre-checks (common for all actions) ---
-        logger.debug(f"Checking if table '{table_name}' exists and is WAL-enabled...")
-        table_info_query = (
-            f"SELECT dedup FROM tables() WHERE table_name = '{safe_table_name_quoted}'"
+        # --- Get Current State ---
+        logger.debug(f"Fetching current status and schema for '{table_name}'...")
+        table_info = _get_schema_and_dedup_info(
+            client, table_name, safe_table_name_quoted
         )
-        table_info_response = client.exec(query=table_info_query)
 
-        if table_info_response.get("count", 0) == 0:
-            logger.error(f"Table '{table_name}' not found.")
+        if table_info.get("error"):
+            logger.error(f"Error getting table info: {table_info['error']}")
             print(
                 json.dumps(
                     {
                         "status": "Error",
                         "table_name": table_name,
-                        "message": "Table not found.",
+                        "action": action,
+                        "message": table_info["error"],
                     },
                     indent=2,
                 )
             )
-            sys.exit(4)  # Use different exit code for not found
+            # Use different exit code for not found vs other errors?
+            sys.exit(4 if "not found" in table_info["error"].lower() else 1)
 
-        table_data = table_info_response["dataset"][0]
-        # is_wal_enabled = table_data[1]
-        # designated_ts_col = table_data[2]
-
-        # if not is_wal_enabled and (action == "enable" or action == "disable"):
-        #     logger.error(
-        #         f"Table '{table_name}' is not WAL-enabled. Deduplication requires WAL."
-        #     )
-        #     print(
-        #         json.dumps(
-        #             {
-        #                 "status": "Error",
-        #                 "table_name": table_name,
-        #                 "action": action,
-        #                 "message": "Deduplication requires the table to be WAL-enabled.",
-        #                 "wal_enabled": False,
-        #             },
-        #             indent=2,
-        #         )
-        #     )
-        #     sys.exit(1)
-        # elif not is_wal_enabled and action == "check":
-        #     logger.info(f"Table '{table_name}' is not WAL-enabled.")
-        #     # Continue check, but report WAL status
+        is_dedup_enabled = table_info["is_dedup_enabled"]
+        designated_ts_col = table_info["designated_timestamp"]
+        current_upsert_keys = table_info["upsert_keys"]
 
         # --- Perform Action ---
         if action == "enable":
             if not args.upsert_keys:
+                # This check is also done by argparse, but double-check here
                 logger.error("Error: --upsert-keys must be provided with --enable.")
                 print(
                     json.dumps(
@@ -182,8 +250,9 @@ def handle_dedupe(args, client: QuestDBClient):
                 sys.exit(1)
 
             if not designated_ts_col:
+                # Should have been caught by _get_schema_and_dedup_info if schema was fetched
                 logger.error(
-                    f"Could not determine designated timestamp for table '{table_name}'. Cannot validate upsert keys."
+                    f"Could not determine designated timestamp for table '{table_name}' from schema. Cannot validate upsert keys."
                 )
                 print(
                     json.dumps(
@@ -191,17 +260,23 @@ def handle_dedupe(args, client: QuestDBClient):
                             "status": "Error",
                             "table_name": table_name,
                             "action": "enable",
-                            "message": "Could not determine designated timestamp.",
+                            "message": "Could not determine designated timestamp from schema.",
                         },
                         indent=2,
                     )
                 )
                 sys.exit(1)
 
-            logger.info(f"Designated timestamp column: '{designated_ts_col}'")
+            logger.info(
+                f"Designated timestamp column from schema: '{designated_ts_col}'"
+            )
 
             # Validate designated timestamp is included
-            if designated_ts_col not in args.upsert_keys:
+            # Compare case-insensitively? QuestDB identifiers are case-insensitive unless quoted.
+            # Let's assume provided keys and parsed TS are canonical (e.g., lowercase or as-is) for now.
+            # Or convert both to lower for comparison:
+            provided_keys_lower = {k.lower() for k in args.upsert_keys}
+            if designated_ts_col.lower() not in provided_keys_lower:
                 logger.error(
                     f"Error: Designated timestamp column '{designated_ts_col}' must be included in --upsert-keys."
                 )
@@ -221,7 +296,7 @@ def handle_dedupe(args, client: QuestDBClient):
 
             keys_str = ", ".join(
                 args.upsert_keys
-            )  # Keys are not quoted inside parentheses
+            )  # Keys are not quoted inside parentheses in ALTER syntax
             enable_query = f"ALTER TABLE '{safe_table_name_quoted}' DEDUP ENABLE UPSERT KEYS({keys_str});"
             logger.debug(f"Executing: {enable_query}")
             response_json = client.exec(
@@ -230,21 +305,39 @@ def handle_dedupe(args, client: QuestDBClient):
 
             if isinstance(response_json, dict) and "error" in response_json:
                 error_msg = response_json["error"]
-                logger.error(
-                    f"Error enabling deduplication for '{table_name}': {error_msg}"
-                )
-                print(
-                    json.dumps(
-                        {
-                            "status": "Error",
-                            "table_name": table_name,
-                            "action": "enable",
-                            "message": error_msg,
-                            "query": response_json.get("query", enable_query),
-                        },
-                        indent=2,
+                # Check if the error indicates non-WAL table
+                if "table is not WAL" in error_msg.lower():
+                    logger.error(
+                        f"Error enabling deduplication: Table '{table_name}' is not WAL-enabled."
                     )
-                )
+                    print(
+                        json.dumps(
+                            {
+                                "status": "Error",
+                                "table_name": table_name,
+                                "action": "enable",
+                                "message": f"Table is not WAL-enabled. {error_msg}",
+                                "query": response_json.get("query", enable_query),
+                            },
+                            indent=2,
+                        )
+                    )
+                else:
+                    logger.error(
+                        f"Error enabling deduplication for '{table_name}': {error_msg}"
+                    )
+                    print(
+                        json.dumps(
+                            {
+                                "status": "Error",
+                                "table_name": table_name,
+                                "action": "enable",
+                                "message": error_msg,
+                                "query": response_json.get("query", enable_query),
+                            },
+                            indent=2,
+                        )
+                    )
                 sys.exit(1)
             else:
                 logger.info(
@@ -276,21 +369,38 @@ def handle_dedupe(args, client: QuestDBClient):
 
             if isinstance(response_json, dict) and "error" in response_json:
                 error_msg = response_json["error"]
-                logger.error(
-                    f"Error disabling deduplication for '{table_name}': {error_msg}"
-                )
-                print(
-                    json.dumps(
-                        {
-                            "status": "Error",
-                            "table_name": table_name,
-                            "action": "disable",
-                            "message": error_msg,
-                            "query": response_json.get("query", disable_query),
-                        },
-                        indent=2,
+                if "table is not WAL" in error_msg.lower():
+                    logger.error(
+                        f"Error disabling deduplication: Table '{table_name}' is not WAL-enabled."
                     )
-                )
+                    print(
+                        json.dumps(
+                            {
+                                "status": "Error",
+                                "table_name": table_name,
+                                "action": "disable",
+                                "message": f"Table is not WAL-enabled. {error_msg}",
+                                "query": response_json.get("query", disable_query),
+                            },
+                            indent=2,
+                        )
+                    )
+                else:
+                    logger.error(
+                        f"Error disabling deduplication for '{table_name}': {error_msg}"
+                    )
+                    print(
+                        json.dumps(
+                            {
+                                "status": "Error",
+                                "table_name": table_name,
+                                "action": "disable",
+                                "message": error_msg,
+                                "query": response_json.get("query", disable_query),
+                            },
+                            indent=2,
+                        )
+                    )
                 sys.exit(1)
             else:
                 logger.info(f"Successfully disabled deduplication for '{table_name}'.")
@@ -311,46 +421,31 @@ def handle_dedupe(args, client: QuestDBClient):
                 sys.exit(0)
 
         elif action == "check":
-            # Fetch dedup status (already known if WAL enabled)
-            dedup_status_query = f"SELECT dedup FROM tables() WHERE table_name = '{safe_table_name_quoted}'"
-            dedup_status_response = client.exec(query=dedup_status_query)
-            is_dedup_enabled = (
-                dedup_status_response["dataset"][0][0]
-                if dedup_status_response.get("count", 0) > 0
-                else False
-            )
-
-            # upsert_keys = []
-            # if is_dedup_enabled:
-            #     # Fetch upsert keys only if deduplication is enabled
-            #     keys_query = f"SELECT column FROM table_columns('{safe_table_name_quoted}') WHERE upsertKey = true ORDER BY column"
-            #     keys_response = client.exec(query=keys_query)
-            #     if keys_response.get("count", 0) > 0:
-            #         upsert_keys = [row[0] for row in keys_response["dataset"]]
-
+            # Information already fetched by _get_schema_and_dedup_info
             result = {
                 "status": "OK",
                 "table_name": table_name,
                 "action": "check",
-                # "wal_enabled": is_wal_enabled,
                 "deduplication_enabled": is_dedup_enabled,
-                # "designated_timestamp": designated_ts_col
-                # if designated_ts_col
-                # else None,
-                "upsert_keys": upsert_keys if is_dedup_enabled else None,
+                "designated_timestamp": designated_ts_col,
+                # Only include keys if dedup is actually enabled and keys were parsed
+                "upsert_keys": current_upsert_keys if is_dedup_enabled else None,
             }
-            # if not is_wal_enabled:
-            #     result["message"] = (
-            #         "Table is not WAL-enabled. Deduplication is not possible."
-            #     )
+            # Add a message if keys couldn't be parsed but dedup is enabled
+            if is_dedup_enabled and current_upsert_keys is None:
+                result["warning"] = (
+                    "Deduplication is enabled, but failed to parse UPSERT KEYS from schema."
+                )
 
             logger.info(f"Deduplication enabled: {is_dedup_enabled}")
             if is_dedup_enabled:
-                logger.info(f"Upsert keys: {upsert_keys}")
+                logger.info(f"Designated Timestamp: {designated_ts_col}")
+                logger.info(f"Upsert keys: {current_upsert_keys}")
             print(json.dumps(result, indent=2))
             sys.exit(0)
 
     except QuestDBAPIError as e:
+        # Catch errors from underlying client.exec calls if not caught within action blocks
         logger.error(f"API Error during dedupe operation for '{table_name}': {e}")
         print(
             json.dumps(
@@ -385,7 +480,7 @@ def handle_dedupe(args, client: QuestDBClient):
 
 
 def simulate_dedupe(args, table_name):
-    """Simulates the dedupe command."""
+    """Simulates the dedupe command based on parsing schema."""
     logger.info(f"[DRY-RUN] Simulating dedupe operation for table '{table_name}':")
     action = "check"  # Default action
     if args.enable:
@@ -395,6 +490,16 @@ def simulate_dedupe(args, table_name):
 
     logger.info(f"[DRY-RUN]   Action: {action}")
 
+    # Simulate fetching info (assume table exists and is basic WAL table for simulation)
+    simulated_dedup_enabled = False  # Assume disabled initially for simulation clarity
+    simulated_ts = "ts"  # Assume 'ts' as designated timestamp
+    simulated_keys = None
+    simulated_create_statement = f"CREATE TABLE '{table_name}' (ts TIMESTAMP, val DOUBLE) TIMESTAMP(ts) PARTITION BY DAY WAL;"
+
+    logger.info(f"[DRY-RUN]   Simulating fetch of current status and schema...")
+    logger.info(f"[DRY-RUN]     Assuming Dedup Enabled: {simulated_dedup_enabled}")
+    logger.info(f"[DRY-RUN]     Assuming Designated Timestamp: {simulated_ts}")
+
     simulated_result = {"dry_run": True, "table_name": table_name, "action": action}
 
     if action == "enable":
@@ -402,37 +507,47 @@ def simulate_dedupe(args, table_name):
             logger.error("[DRY-RUN] Error: --upsert-keys are required for --enable.")
             simulated_result["status"] = "Error (Simulated)"
             simulated_result["message"] = "--upsert-keys missing"
+        elif simulated_ts not in args.upsert_keys:
+            logger.error(
+                f"[DRY-RUN] Error: Designated timestamp '{simulated_ts}' not in provided keys {args.upsert_keys}."
+            )
+            simulated_result["status"] = "Error (Simulated)"
+            simulated_result["message"] = (
+                f"Designated timestamp '{simulated_ts}' missing from provided keys."
+            )
         else:
             keys_str = ", ".join(args.upsert_keys)
-            query = f"ALTER TABLE '{table_name}' DEDUP ENABLE UPSERT KEYS({keys_str});"
+            # Quote table name for ALTER statement
+            safe_table_name_quoted = table_name.replace("'", "''")
+            query = f"ALTER TABLE '{safe_table_name_quoted}' DEDUP ENABLE UPSERT KEYS({keys_str});"
             logger.info(f"[DRY-RUN]   Would execute: {query}")
             simulated_result["status"] = "OK (Simulated)"
             simulated_result["upsert_keys_set"] = args.upsert_keys
             simulated_result["ddl"] = "OK (Simulated)"
+            simulated_result["message"] = "Deduplication would be enabled."
+
     elif action == "disable":
-        query = f"ALTER TABLE '{table_name}' DEDUP DISABLE;"
+        # Quote table name for ALTER statement
+        safe_table_name_quoted = table_name.replace("'", "''")
+        query = f"ALTER TABLE '{safe_table_name_quoted}' DEDUP DISABLE;"
         logger.info(f"[DRY-RUN]   Would execute: {query}")
         simulated_result["status"] = "OK (Simulated)"
         simulated_result["ddl"] = "OK (Simulated)"
+        simulated_result["message"] = "Deduplication would be disabled."
+
     elif action == "check":
-        # Simulate checking dedup status and keys
-        query_status = (
-            f"SELECT dedup, walEnabled FROM tables() WHERE table_name = '{table_name}'"
+        logger.info(
+            f"[DRY-RUN]   Simulating check result based on assumed initial state."
         )
-        query_keys = f"SELECT column, upsertKey FROM table_columns('{table_name}') WHERE upsertKey = true"
-        query_ts = (
-            f"SELECT column FROM table_columns('{table_name}') WHERE designated = true"
-        )
-        logger.info(f"[DRY-RUN]   Would execute: {query_status}")
-        logger.info(f"[DRY-RUN]   Would execute: {query_keys}")
-        logger.info(f"[DRY-RUN]   Would execute: {query_ts}")
         simulated_result["status"] = "OK (Simulated)"
-        simulated_result["deduplication_enabled"] = (
-            True  # Assume enabled for simulation
+        simulated_result["deduplication_enabled"] = simulated_dedup_enabled
+        simulated_result["designated_timestamp"] = simulated_ts
+        simulated_result["upsert_keys"] = (
+            simulated_keys  # Will be None if simulated_dedup_enabled is False
         )
-        simulated_result["wal_enabled"] = True  # Assume enabled for simulation
-        simulated_result["designated_timestamp"] = "ts"  # Assume ts for simulation
-        simulated_result["upsert_keys"] = ["ts", "symbol"]  # Simulate some keys
+        simulated_result["message"] = (
+            f"Checked status (Simulated: enabled={simulated_dedup_enabled})."
+        )
 
     print(json.dumps(simulated_result, indent=2))
 
