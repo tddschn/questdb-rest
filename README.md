@@ -150,7 +150,9 @@ $ qdb-cli rename trips taxi_trips_feb_2018
   - [PyPI packages and installation](#pypi-packages-and-installation)
   - [The Python API](#the-python-api)
   - [Screenshots](#screenshots)
-  - [Stats](#stats)
+  - [Code Stats](#code-stats)
+    - [LOC by file](#loc-by-file)
+    - [Token count by function](#token-count-by-function)
 
 ## How's this different from the official `py-questdb-client` and `py-questdb-query` packages?
 
@@ -565,10 +567,21 @@ QuestDBClient
 ![CleanShot-2025-03-30-16.33.18](https://g.teddysc.me/tddschn/16651cccc351b1d2742a4bddaee1c62d/CleanShot-2025-03-30-16.33.18_base64.txt?b)
 ![CleanShot-2025-03-30-16.33.36](https://g.teddysc.me/tddschn/16651cccc351b1d2742a4bddaee1c62d/CleanShot-2025-03-30-16.33.36_base64.txt?b)
 
-## Stats
+## Code Stats
 
-LOC by file:
+Below are updated for version 3.0.3.
+
+### LOC by file
 
 ![](https://g.teddysc.me/d149da246628052d4550f3f0baa41dd5?b)
 
 Interactive: https://g.teddysc.me/511ceb311b59770268a709a589ce4fef
+
+### Token count by function
+
+![](https://g.teddysc.me/3b8c417c0df3ce78b43c76915e5133fb?b)
+
+https://g.teddysc.me/5c5532cb807d1af05e8f94a100d5d758
+
+This shows how complex the `create-or-replace-table-from-query` subcommand is.
+
