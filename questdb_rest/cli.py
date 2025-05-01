@@ -83,6 +83,76 @@ def extract_statements_from_sql(sql_string: str) -> list[str]:
     return cleaned_statements
 
 
+def simulate_dedupe_enable(args, table_name, upsert_keys):
+    """Simulates enabling deduplication."""
+    logger.info("[DRY-RUN] Simulating enabling deduplication:")
+    logger.info(f"[DRY-RUN]   Target Table: '{table_name}'")
+    logger.info(f"[DRY-RUN]   UPSERT Keys: {upsert_keys}")
+    safe_table_name = table_name.replace("'", "''")
+    keys_str = ",".join([k.strip() for k in upsert_keys])
+    query = f"ALTER TABLE '{safe_table_name}' DEDUP ENABLE UPSERT KEYS({keys_str})"
+    logger.info(f"[DRY-RUN]   Would execute: {query}")
+    print(
+        json.dumps(
+            {
+                "dry_run": True,
+                "operation": "dedupe_enable",
+                "table_name": table_name,
+                "upsert_keys": upsert_keys,
+                "status": "OK (Simulated)",
+            },
+            indent=2,
+        )
+    )
+
+
+def simulate_dedupe_disable(args, table_name):
+    """Simulates disabling deduplication."""
+    logger.info("[DRY-RUN] Simulating disabling deduplication:")
+    logger.info(f"[DRY-RUN]   Target Table: '{table_name}'")
+    safe_table_name = table_name.replace("'", "''")
+    query = f"ALTER TABLE '{safe_table_name}' DEDUP DISABLE"
+    logger.info(f"[DRY-RUN]   Would execute: {query}")
+    print(
+        json.dumps(
+            {
+                "dry_run": True,
+                "operation": "dedupe_disable",
+                "table_name": table_name,
+                "status": "OK (Simulated)",
+            },
+            indent=2,
+        )
+    )
+
+
+def simulate_dedupe_check(args, table_name):
+    """Simulates checking deduplication status."""
+    logger.info("[DRY-RUN] Simulating deduplication check:")
+    logger.info(f"[DRY-RUN]   Target Table: '{table_name}'")
+    safe_table_name = table_name.replace("'", "''")
+    query1 = f"SELECT dedup FROM tables() WHERE table_name = '{safe_table_name}'"
+    query2 = (
+        f"SELECT column FROM table_columns('{safe_table_name}') WHERE upsertKey = true"
+    )
+    logger.info(f"[DRY-RUN]   Would execute: {query1}")
+    logger.info(f"[DRY-RUN]   Would execute: {query2}")
+    # Simulate a positive response
+    print(
+        json.dumps(
+            {
+                "dry_run": True,
+                "operation": "dedupe_check",
+                "table_name": table_name,
+                "deduplication_enabled": True,  # Simulated value
+                "upsert_keys": ["ts", "symbol"],  # Simulated value
+                "status": "OK (Simulated)",
+            },
+            indent=2,
+        )
+    )
+
+
 def simulate_drop(args, table_name, index, total):
     """Simulates the drop table command."""
     logger.info(f"[DRY-RUN] Simulating DROP TABLE ({index}/{total}):")
@@ -1731,6 +1801,179 @@ def handle_schema(args, client: QuestDBClient):
         sys.exit(0)
 
 
+def handle_dedupe(args, client: QuestDBClient):
+    """Handles the dedupe command (enable, disable, check)."""
+    table_name = args.table_name
+    safe_table_name = table_name.replace("'", "''")  # Basic escaping
+
+    # Determine action
+    action = "check"  # Default action
+    if args.enable:
+        action = "enable"
+    elif args.disable:
+        action = "disable"
+
+    logger.info(
+        f"Performing deduplication action '{action}' for table '{table_name}'..."
+    )
+
+    # --- Dry Run Check ---
+    if args.dry_run:
+        if action == "enable":
+            if not args.upsert_keys:
+                logger.error(
+                    "[DRY-RUN] --upsert-keys is required when enabling deduplication."
+                )
+                sys.exit(1)
+            keys_list = [k.strip() for k in args.upsert_keys.split(",") if k.strip()]
+            simulate_dedupe_enable(args, table_name, keys_list)
+        elif action == "disable":
+            simulate_dedupe_disable(args, table_name)
+        else:  # action == 'check'
+            simulate_dedupe_check(args, table_name)
+        sys.exit(0)
+
+    # --- Actual Execution ---
+    try:
+        if action == "enable":
+            if not args.upsert_keys:
+                logger.error("--upsert-keys is required with --enable.")
+                # Use parser.error for better integration? For now, simple exit.
+                sys.exit(1)
+            keys_list = [k.strip() for k in args.upsert_keys.split(",") if k.strip()]
+            if not keys_list:
+                logger.error("UPSERT keys list cannot be empty.")
+                sys.exit(1)
+
+            # Consider validating if designated timestamp is present?
+            # For now, let the database handle the validation.
+            keys_str = ",".join(keys_list)
+            query = (
+                f"ALTER TABLE '{safe_table_name}' DEDUP ENABLE UPSERT KEYS({keys_str})"
+            )
+            logger.info(f"Executing: {query}")
+            response = client.exec(
+                query=query, statement_timeout=args.statement_timeout
+            )
+            if isinstance(response, dict) and "error" in response:
+                raise QuestDBAPIError(
+                    f"Failed to enable deduplication: {response['error']}",
+                    response_data=response,
+                )
+            print(
+                json.dumps(
+                    {
+                        "status": "OK",
+                        "operation": "dedupe_enable",
+                        "table_name": table_name,
+                        "upsert_keys": keys_list,
+                        "message": f"Deduplication enabled for table '{table_name}'.",
+                        "ddl_response": response.get("ddl")
+                        if isinstance(response, dict)
+                        else None,
+                    },
+                    indent=2,
+                )
+            )
+
+        elif action == "disable":
+            query = f"ALTER TABLE '{safe_table_name}' DEDUP DISABLE"
+            logger.info(f"Executing: {query}")
+            response = client.exec(
+                query=query, statement_timeout=args.statement_timeout
+            )
+            if isinstance(response, dict) and "error" in response:
+                raise QuestDBAPIError(
+                    f"Failed to disable deduplication: {response['error']}",
+                    response_data=response,
+                )
+            print(
+                json.dumps(
+                    {
+                        "status": "OK",
+                        "operation": "dedupe_disable",
+                        "table_name": table_name,
+                        "message": f"Deduplication disabled for table '{table_name}'.",
+                        "ddl_response": response.get("ddl")
+                        if isinstance(response, dict)
+                        else None,
+                    },
+                    indent=2,
+                )
+            )
+
+        else:  # action == 'check'
+            logger.info(f"Checking deduplication status for '{table_name}'...")
+            # Query 1: Check if deduplication is enabled
+            query1 = (
+                f"SELECT dedup FROM tables() WHERE table_name = '{safe_table_name}'"
+            )
+            response1 = client.exec(
+                query=query1, statement_timeout=args.statement_timeout
+            )
+
+            if isinstance(response1, dict) and "error" in response1:
+                raise QuestDBAPIError(
+                    f"Failed check (tables function): {response1['error']}",
+                    response_data=response1,
+                )
+            if not response1.get("dataset"):
+                raise QuestDBError(
+                    f"Table '{table_name}' not found or tables() query failed."
+                )
+
+            dedup_enabled = response1["dataset"][0][0]  # Should be boolean
+
+            # Query 2: Get UPSERT keys if enabled
+            upsert_keys_list = []
+            if dedup_enabled:
+                # query2 = f"SELECT column, upsertKey FROM table_columns('{safe_table_name}')" # Get all columns
+                # More efficient query:
+                query2 = f"SELECT column FROM table_columns('{safe_table_name}') WHERE upsertKey = true"
+                response2 = client.exec(
+                    query=query2, statement_timeout=args.statement_timeout
+                )
+                if isinstance(response2, dict) and "error" in response2:
+                    raise QuestDBAPIError(
+                        f"Failed check (table_columns function): {response2['error']}",
+                        response_data=response2,
+                    )
+                # Extract keys if dataset exists
+                if response2.get("dataset"):
+                    upsert_keys_list = [row[0] for row in response2["dataset"]]
+
+            print(
+                json.dumps(
+                    {
+                        "status": "OK",
+                        "operation": "dedupe_check",
+                        "table_name": table_name,
+                        "deduplication_enabled": dedup_enabled,
+                        "upsert_keys": upsert_keys_list if dedup_enabled else None,
+                    },
+                    indent=2,
+                )
+            )
+
+        sys.exit(0)
+
+    except QuestDBAPIError as e:
+        logger.error(f"API Error during dedupe operation for '{table_name}': {e}")
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
+    except QuestDBError as e:
+        logger.error(f"Error during dedupe operation for '{table_name}': {e}")
+        sys.stderr.write(f"Error: {e}\n")
+        sys.exit(1)
+    except (IndexError, KeyError, TypeError) as e:
+        logger.error(f"Error parsing response during dedupe check: {e}")
+        sys.stderr.write(f"Error parsing server response: {e}\n")
+        sys.exit(1)
+    except KeyboardInterrupt:
+        logger.info("\nOperation cancelled by user.")
+        sys.exit(130)
+
+
 def handle_rename(args, client: QuestDBClient):
     """Handles the rename command using the client's exec method."""
     old_name = args.old_table_name
@@ -1933,6 +2176,10 @@ def detect_scheme_in_host(host_str):
         return "https", host_str[8:]  # Remove "https://" prefix
 
     return None, host_str  # No scheme detected in host string
+
+
+# --- Main Execution ---
+# questdb_rest/cli.py
 
 
 # --- Main Execution ---
@@ -2454,6 +2701,43 @@ Links:
     )
     parser_drop.set_defaults(func=handle_drop)
 
+    # --- DEDUPE Sub-command (NEW) ---
+    parser_dedupe = subparsers.add_parser(
+        "dedupe",
+        help="Manage table data deduplication (check, enable, disable). Requires WAL tables.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        add_help=False,
+    )
+    parser_dedupe.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help="Show this help message and exit.",
+    )
+    parser_dedupe.add_argument("table_name", help="Name of the target table.")
+    # Action flags
+    dedupe_action_group = parser_dedupe.add_mutually_exclusive_group()
+    dedupe_action_group.add_argument(
+        "--enable",
+        action="store_true",
+        help="Enable deduplication. Requires --upsert-keys.",
+    )
+    dedupe_action_group.add_argument(
+        "--disable", action="store_true", help="Disable deduplication."
+    )
+    # --check is the default action if neither --enable nor --disable is given
+    parser_dedupe.add_argument(
+        "--upsert-keys",
+        help="Comma-separated list of column names for UPSERT KEYS (required with --enable, timestamp column must be included).",
+    )
+    parser_dedupe.add_argument(
+        "--statement-timeout",
+        type=int,
+        help="Query timeout in milliseconds for ALTER/SELECT operations.",
+    )
+    parser_dedupe.set_defaults(func=handle_dedupe)
+
     # --- GEN-CONFIG Sub-command ---
     parser_gen_config = subparsers.add_parser(
         "gen-config",
@@ -2606,6 +2890,14 @@ Links:
     elif args.command == "rename":
         if args.old_table_name == args.new_table_name:
             parser_rename.error("Old and new table names cannot be the same.")
+    elif args.command == "dedupe":
+        if args.enable and not args.upsert_keys:
+            parser_dedupe.error("--upsert-keys is required when using --enable.")
+        if (args.disable or not (args.enable or args.disable)) and args.upsert_keys:
+            # Check if upsert_keys provided when not enabling
+            logger.warning(
+                "--upsert-keys is only used with --enable and will be ignored."
+            )
 
     # --- Instantiate Client (if needed and not dry run) ---
     client = None
