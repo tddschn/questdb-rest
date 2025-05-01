@@ -153,6 +153,7 @@ $ qdb-cli rename trips taxi_trips_feb_2018
   - [Code Stats](#code-stats)
     - [LOC by file](#loc-by-file)
     - [Token count by function](#token-count-by-function)
+    - [Function LOC Sunburst Chart](#function-loc-sunburst-chart)
 
 ## How's this different from the official `py-questdb-client` and `py-questdb-query` packages?
 
@@ -585,3 +586,9 @@ https://g.teddysc.me/5c5532cb807d1af05e8f94a100d5d758
 
 This shows how complex the `create-or-replace-table-from-query` subcommand is.
 
+
+### Function LOC Sunburst Chart
+
+![](https://g.teddysc.me/442854d30153d0107fe5500a73d854a5?b)
+
+https://g.teddysc.me/4b237bf675c319dabe99cf7edb6f79e2
