@@ -1,3 +1,4 @@
+GITINGEST_OUTPUT_FILE := qdb-cli.txt
 patch-p: patch install publish push
 minor-p: minor install publish push
 major-p: major install publish push
@@ -25,6 +26,6 @@ yapf:
 	poetry run yapf -i -vv **/*.py
 
 gitingest:
-	gitingest questdb_rest -o qdb-cli.txt
+	gitingest questdb_rest -o $(GITINGEST_OUTPUT_FILE) && rpp_ $(GITINGEST_OUTPUT_FILE)
 
 .PHONE: *
