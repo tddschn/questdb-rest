@@ -2388,37 +2388,8 @@ def detect_scheme_in_host(host_str):
     return None, host_str  # No scheme detected in host string
 
 
-# --- Main Execution ---
-# questdb_rest/cli.py
-
-
-# --- Main Execution ---
-# questdb_rest/cli.py
-
-
-def main():
-    parser = argparse.ArgumentParser(
-        description="QuestDB REST API Command Line Interface.\nLogs to stderr, outputs data to stdout.\n\n"
-        "Uses QuestDB REST API via questdb_rest library.",
-        formatter_class=argparse.RawTextHelpFormatter,
-        add_help=False,
-        epilog="""This CLI can also be used as a Python library.
-
-Links:
-- Write up and demo: https://teddysc.me/blog/questdb-rest
-- Interactive QuestDB Shell: https://teddysc.me/blog/rlwrap-questdb-shell
-- GitHub: https://github.com/tddschn/questdb-rest
-- PyPI: https://pypi.org/project/questdb-rest/""",
-    )
-    parser.add_argument(
-        "-h",
-        "--help",
-        action="help",
-        default=argparse.SUPPRESS,
-        help="Show this help message and exit.",
-    )
-
-    # Global arguments
+def _add_parser_global(parser: argparse.ArgumentParser):
+    """Adds global arguments to the main parser."""
     parser.add_argument(
         "-H",
         "--host",
@@ -2485,11 +2456,9 @@ Links:
         help="Stop execution immediately if any item (file/statement/table) fails (where applicable).",
     )
 
-    subparsers = parser.add_subparsers(
-        dest="command", required=True, help="Available sub-commands"
-    )
 
-    # --- IMP Sub-command ---
+def _add_parser_imp(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'imp' subcommand."""
     parser_imp = subparsers.add_parser(
         "imp",
         help="Import data from file(s) using /imp.",
@@ -2610,10 +2579,12 @@ Links:
         default=True,
         help="Automatically create table if it does not exist.",
     )
-    # --stop-on-error is global
+    # Inherits global --stop-on-error
     parser_imp.set_defaults(func=handle_imp)
 
-    # --- EXEC Sub-command ---
+
+def _add_parser_exec(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'exec' subcommand."""
     parser_exec = subparsers.add_parser(
         "exec",
         help="Execute SQL statement(s) using /exec (returns JSON).\nReads SQL from --query, --file, --get-query-from-python-module, or stdin.",
@@ -2695,7 +2666,7 @@ Links:
         "--new-table-name",
         help="Name of the new table to create from query result(s). Required if --create-table is used.",
     )
-    # --stop-on-error is global
+    # Inherits global --stop-on-error
     # Output formatting options
     exec_format_group = parser_exec.add_mutually_exclusive_group()
     exec_format_group.add_argument(
@@ -2719,7 +2690,9 @@ Links:
     )
     parser_exec.set_defaults(func=handle_exec)
 
-    # --- EXP Sub-command ---
+
+def _add_parser_exp(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'exp' subcommand."""
     parser_exp = subparsers.add_parser(
         "exp",
         help="Export data using /exp (returns CSV to stdout or file).",
@@ -2748,7 +2721,9 @@ Links:
     )
     parser_exp.set_defaults(func=handle_exp)
 
-    # --- CHK Sub-command ---
+
+def _add_parser_chk(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'chk' subcommand."""
     parser_chk = subparsers.add_parser(
         "chk",
         help="Check if a table exists using /chk (returns JSON). Exit code 0 if exists, 3 if not.",
@@ -2765,7 +2740,9 @@ Links:
     parser_chk.add_argument("table_name", help="Name of the table to check.")
     parser_chk.set_defaults(func=handle_chk)
 
-    # --- SCHEMA Sub-command ---
+
+def _add_parser_schema(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'schema' subcommand."""
     parser_schema = subparsers.add_parser(
         "schema",
         help="Fetch CREATE TABLE statement(s) for one or more tables.",
@@ -2790,7 +2767,9 @@ Links:
     )
     parser_schema.set_defaults(func=handle_schema)
 
-    # --- RENAME Sub-command ---
+
+def _add_parser_rename(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'rename' subcommand."""
     parser_rename = subparsers.add_parser(
         "rename",
         help="Rename a table using RENAME TABLE. Backs up target name by default if it exists.",
@@ -2818,7 +2797,9 @@ Links:
     )
     parser_rename.set_defaults(func=handle_rename)
 
-    # --- CREATE-OR-REPLACE Sub-command (NEW) ---
+
+def _add_parser_cor(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'create-or-replace-table-from-query' subcommand."""
     parser_cor = subparsers.add_parser(
         "create-or-replace-table-from-query",
         aliases=["cor"],  # Add alias
@@ -2884,7 +2865,9 @@ Links:
     )
     parser_cor.set_defaults(func=handle_create_or_replace_table_from_query)
 
-    # --- DROP Sub-command (NEW) ---
+
+def _add_parser_drop(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'drop' subcommand."""
     parser_drop = subparsers.add_parser(
         "drop",
         aliases=["drop-table"],  # Add alias
@@ -2910,7 +2893,9 @@ Links:
     )
     parser_drop.set_defaults(func=handle_drop)
 
-    # --- DEDUPE Sub-command (NEW) ---
+
+def _add_parser_dedupe(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'dedupe' subcommand."""
     parser_dedupe = subparsers.add_parser(
         "dedupe",
         help="Enable, disable, or check data deduplication settings for a WAL table.",
@@ -2953,7 +2938,9 @@ Links:
     )
     parser_dedupe.set_defaults(func=handle_dedupe)
 
-    # --- GEN-CONFIG Sub-command ---
+
+def _add_parser_gen_config(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'gen-config' subcommand."""
     parser_gen_config = subparsers.add_parser(
         "gen-config",
         help="Generate a default config file at ~/.questdb-rest/config.json",
@@ -2970,7 +2957,51 @@ Links:
     # No client needed for gen-config
     parser_gen_config.set_defaults(func=handle_gen_config, requires_client=False)
 
-    # --- Parse Arguments ---
+
+def get_args():
+    """Parses command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="QuestDB REST API Command Line Interface.\nLogs to stderr, outputs data to stdout.\n\n"
+        "Uses QuestDB REST API via questdb_rest library.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        add_help=False,
+        epilog="""This CLI can also be used as a Python library.
+
+Links:
+- Write up and demo: https://teddysc.me/blog/questdb-rest
+- Interactive QuestDB Shell: https://teddysc.me/blog/rlwrap-questdb-shell
+- GitHub: https://github.com/tddschn/questdb-rest
+- PyPI: https://pypi.org/project/questdb-rest/""",
+    )
+    parser.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help="Show this help message and exit.",
+    )
+
+    # Add global arguments
+    _add_parser_global(parser)
+
+    # Add subparsers
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, help="Available sub-commands"
+    )
+
+    # Add subcommand arguments
+    _add_parser_imp(subparsers)
+    _add_parser_exec(subparsers)
+    _add_parser_exp(subparsers)
+    _add_parser_chk(subparsers)
+    _add_parser_schema(subparsers)
+    _add_parser_rename(subparsers)
+    _add_parser_cor(subparsers)
+    _add_parser_drop(subparsers)
+    _add_parser_dedupe(subparsers)
+    _add_parser_gen_config(subparsers)
+
+    # Parse arguments
     try:
         args = parser.parse_args()
         # Add requires_client default if not set by a specific command (like gen-config)
@@ -2981,6 +3012,8 @@ Links:
         if args.command == "dedupe" and not (args.enable or args.disable or args.check):
             args.check = True  # Default to check
 
+        return args
+
     except SystemExit as e:  # Catch argparse errors specifically
         # Argparse already prints help/errors, just exit
         sys.exit(e.code if e.code is not None else 1)
@@ -2988,6 +3021,11 @@ Links:
         parser.print_usage(sys.stderr)
         logger.error(f"Argument parsing error: {e}")
         sys.exit(2)  # Use exit code 2 for CLI usage errors
+
+
+def main():
+    """Main entry point for the CLI."""
+    args = get_args()
 
     # Set logging level based on args
     log_level = logging.WARNING
@@ -3078,7 +3116,9 @@ Links:
                 sys.exit(130)
 
     # --- Validate Command Specific Args ---
-    # Example: Validate imp --name-func arguments
+    # Validation is now performed within get_args() where parser is available,
+    # or can be moved to specific handler functions if preferred.
+    # Keeping some basic validation here for demonstration if needed.
     if args.command == "imp":
         if args.name_func == "add_prefix" and not args.name_func_prefix:
             logger.debug(
@@ -3095,7 +3135,11 @@ Links:
     elif args.command == "exec":
         # Check if create-table is used without new-table-name
         if args.create_table and not args.new_table_name:
-            parser_exec.error("--new-table-name is required when using --create-table.")
+            # This validation should ideally be in get_args or using argparse logic
+            logger.error(
+                "--new-table-name is required when using --create-table. Exiting."
+            )
+            sys.exit(2)
         # Check if query source is missing (stdin check happens in handler)
         if (
             not args.query
@@ -3103,17 +3147,27 @@ Links:
             and not args.get_query_from_python_module
             and sys.stdin.isatty()
         ):
-            parser_exec.error(
-                "No SQL query provided via --query, --file, --get-query-from-python-module, or stdin."
+            # This validation should ideally be in get_args or using argparse logic
+            logger.error(
+                "No SQL query provided via --query, --file, --get-query-from-python-module, or stdin. Exiting."
             )
+            sys.exit(2)
     elif args.command == "rename":
         if args.old_table_name == args.new_table_name:
-            parser_rename.error("Old and new table names cannot be the same.")
+            # This validation should ideally be in get_args or using argparse logic
+            logger.error("Old and new table names cannot be the same. Exiting.")
+            sys.exit(2)
     elif args.command == "dedupe":  # New validation for dedupe
         if args.enable and not args.upsert_keys:
-            parser_dedupe.error("--upsert-keys are required when using --enable.")
+            # This validation should ideally be in get_args or using argparse logic
+            logger.error("--upsert-keys are required when using --enable. Exiting.")
+            sys.exit(2)
         if (args.disable or args.check) and args.upsert_keys:
-            parser_dedupe.error("--upsert-keys should only be provided with --enable.")
+            # This validation should ideally be in get_args or using argparse logic
+            logger.error(
+                "--upsert-keys should only be provided with --enable. Exiting."
+            )
+            sys.exit(2)
 
     # --- Instantiate Client (if needed and not dry run) ---
     client = None
@@ -3238,7 +3292,9 @@ Links:
         sys.exit(130)
     except SystemExit as e:
         # Allow sys.exit calls from handlers to propagate
-        sys.exit(e.code)
+        sys.exit(
+            e.code if e.code is not None else 0
+        )  # Default to exit 0 if code is None
     except (QuestDBConnectionError, QuestDBAPIError, QuestDBError) as e:
         # Catch specific client errors that might not be caught in handlers
         # Logged by client already, just exit non-zero
