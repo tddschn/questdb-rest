@@ -305,6 +305,8 @@ Options:
 
 ### `create-or-replace-table-from-query` or `cor`
 
+https://stackoverflow.com/a/79601299/11133602
+
 QuestDB doesn't have `DELETE FROM` to delete rows, you can only create a new table and drop the old one. This command does that for you, and optionally backs up the old table.
 
 It does complex checks to ensure the queries are correctly constructed and are run in the correct order.
