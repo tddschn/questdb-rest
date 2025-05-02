@@ -1,31 +1,50 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Regex matching UUID-4 with either dashes or underscores
+UUID_REGEX='[0-9a-f]{8}([-_][0-9a-f]{4}){3}[-_][0-9a-f]{12}'
+
 print_help() {
     cat <<EOF
-Usage: $(basename "$0") [regex]
+Usage: $(basename "$0") [--uuid] [regex]
 
 Get a list of table names from QuestDB.
 If you provide a regex, only tables whose name matches will be returned.
+If you pass --uuid, only tables whose name contains a UUID-4 (dash or underscore) will be returned.
+You can combine --uuid and regex to apply both filters.
 
 OPTIONS:
   -h, --help    Show this help message and exit
+  --uuid        Match only tables containing a UUID-4 in their name
 
-EXAMPLE:
+EXAMPLES:
   # list all table names
   $(basename "$0")
 
+  # list only tables containing a UUID-4
+  $(basename "$0") --uuid
+
   # list only tables starting with "equities_"
   $(basename "$0") equities_
+
+  # list only tables starting with "equities_" that also contain a UUID-4
+  $(basename "$0") --uuid equities_
 EOF
 }
 
-# Parse options
+# default flags
+uuid_flag=false
+
+# parse options
 while [[ $# -gt 0 ]]; do
     case "$1" in
     -h | --help)
         print_help
         exit 0
+        ;;
+    --uuid)
+        uuid_flag=true
+        shift
         ;;
     --) # end of options
         shift
@@ -36,25 +55,38 @@ while [[ $# -gt 0 ]]; do
         print_help
         exit 1
         ;;
-    *) # first non-option arg is the regex
+    *) # first non-option is regex
         break
         ;;
     esac
 done
 
-# At this point, $1 is either the regex (if any) or empty
+# positional regex (if any)
 regex="${1:-}"
 
-# Build the SQL query
+# build WHERE clauses
+conds=()
 if [[ -n "$regex" ]]; then
-    # wrap the regex in single quotes
-    query="SELECT table_name FROM tables WHERE table_name ~ '${regex}'"
-else
-    # no WHERE clause
-    query="SELECT table_name FROM tables"
+    conds+=("table_name ~ '${regex}'")
+fi
+if [[ "$uuid_flag" = true ]]; then
+    conds+=("table_name ~ '${UUID_REGEX}'")
 fi
 
-# Execute and post-process
+# assemble WHERE clause
+if ((${#conds[@]})); then
+    # join with AND
+    joined=$(printf '%s AND ' "${conds[@]}")
+    joined=${joined% AND } # strip trailing " AND "
+    where_clause="WHERE ${joined}"
+else
+    where_clause=""
+fi
+
+# final query
+query="SELECT table_name FROM tables ${where_clause}"
+
+# execute and clean up output
 qdb-cli exp "$query" |
-    tail -n +2 | # drop header
-    tr -d '"'    # strip any quotes
+    tail -n +2 | # drop header row
+    tr -d '"'    # strip quotes
