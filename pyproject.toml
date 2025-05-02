@@ -14,11 +14,13 @@ packages = [{ include = "questdb_rest" }]
 [tool.poetry.scripts]
 qdb-cli = "questdb_rest.cli:main"
 questdb-cli = "questdb_rest.cli:main"
+qdb-table-names = { reference = "scripts/qdb-table-names", type = "file" }
 qdb-drop-tables-by-regex = { reference = "scripts/qdb-drop-tables-by-regex", type = "file" }
-questdb-drop-tables-by-regex = { reference = "scripts/questdb-drop-tables-by-regex", type = "file" }
+# questdb-drop-tables-by-regex = { reference = "scripts/questdb-drop-tables-by-regex", type = "file" }
 qdb-imp-from-stdin = { reference = "scripts/qdb-imp-from-stdin", type = "file" }
-questdb-imp-from-stdin = { reference = "scripts/questdb-imp-from-stdin", type = "file" }
+# questdb-imp-from-stdin = { reference = "scripts/questdb-imp-from-stdin", type = "file" }
 qdb-copy-single-col-values-from-query = { reference = "scripts/qdb-copy-single-col-values-from-query", type = "file" }
+qdb-get-single-col-values-from-query = { reference = "scripts/qdb-get-single-col-values-from-query", type = "file" }
 
 [tool.poetry.urls]
 "Bug Tracker" = "https://github.com/tddschn/questdb-rest/issues"
