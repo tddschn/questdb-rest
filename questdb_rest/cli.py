@@ -1486,12 +1486,54 @@ def handle_chk(args, client: QuestDBClient):
 
 def handle_drop(args, client: QuestDBClient):
     """Handles the drop/drop-table command using the client's exec method."""
+    table_names_to_drop = []
+    source_description = ""
+
+    # 1. Determine the source of table names and load them
+    if args.table_names:
+        table_names_to_drop = args.table_names
+        source_description = "command line arguments"
+    elif args.file:
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                table_names_to_drop = [
+                    line.strip() for line in f if line.strip()
+                ]  # Read non-empty lines
+            source_description = f"file '{args.file}'"
+        except IOError as e:
+            logger.warning(f"Error reading table names file '{args.file}': {e}")
+            sys.exit(1)
+    elif not sys.stdin.isatty():
+        logger.info("Reading table names from standard input (one per line)...")
+        try:
+            table_names_to_drop = [
+                line.strip() for line in sys.stdin if line.strip()
+            ]  # Read non-empty lines
+            source_description = "standard input"
+        except Exception as e:  # Catch potential errors during stdin read
+            logger.warning(f"Error reading table names from stdin: {e}")
+            sys.exit(1)
+    else:
+        logger.warning(
+            "No table names provided via arguments, --file, or standard input."
+        )
+        sys.exit(1)  # Exit if no tables specified
+
+    if not table_names_to_drop:
+        logger.warning(f"No valid table names found in {source_description}.")
+        sys.exit(0)
+
+    logger.info(
+        f"Found {len(table_names_to_drop)} table(s) to drop from {source_description}."
+    )
+
+    # 2. Process the tables
     any_table_failed = False
-    num_tables = len(args.table_names)
+    num_tables = len(table_names_to_drop)
     json_separator = "\n"
     first_output_written = False
 
-    for i, table_name in enumerate(args.table_names):
+    for i, table_name in enumerate(table_names_to_drop):
         logger.info(
             f"--- Processing DROP for table {i + 1}/{num_tables}: '{table_name}' ---"
         )
@@ -1518,22 +1560,43 @@ def handle_drop(args, client: QuestDBClient):
             # Check for errors within the JSON response
             if isinstance(response_json, dict) and "error" in response_json:
                 error_msg = response_json["error"]
-                # Check if the error is "table does not exist" - treat as warning? Or configurable?
-                # For now, treat all errors as failures.
-                logger.error(f"Error dropping table '{table_name}': {error_msg}")
-                sys.stderr.write(
-                    f"-- Error dropping table '{table_name}' --\nError: {error_msg}\n"
-                )
-                sys.stderr.write(f"Query: {response_json.get('query', query)}\n")
-                any_table_failed = True
-                if args.stop_on_error:
+                # Check if the error is "table does not exist"
+                if "table does not exist" in error_msg.lower():
                     logger.warning(
-                        "Stopping execution due to error (stop-on-error enabled)."
+                        f"Table '{table_name}' does not exist, skipping drop."
                     )
-                    sys.exit(1)
+                    # Optionally treat "not exists" as success or failure?
+                    # For now, log warning but don't mark as failure.
+                    # If stop_on_error is false, we'd continue anyway.
+                    # Print a specific JSON status for this?
+                    result = {
+                        "status": "Skipped",
+                        "table_name": table_name,
+                        "message": f"Table '{table_name}' does not exist.",
+                        "error_details": error_msg,
+                    }
+                    if first_output_written:
+                        sys.stdout.write(json_separator)
+                    print(json.dumps(result, indent=2))
+                    first_output_written = True
+                    continue  # Move to the next table
+
                 else:
-                    logger.warning("Continuing execution (stop-on-error disabled).")
-                    continue  # Skip to next table
+                    # Handle other errors as failures
+                    logger.error(f"Error dropping table '{table_name}': {error_msg}")
+                    sys.stderr.write(
+                        f"-- Error dropping table '{table_name}' --\nError: {error_msg}\n"
+                    )
+                    sys.stderr.write(f"Query: {response_json.get('query', query)}\n")
+                    any_table_failed = True
+                    if args.stop_on_error:
+                        logger.warning(
+                            "Stopping execution due to error (stop-on-error enabled)."
+                        )
+                        sys.exit(1)
+                    else:
+                        logger.warning("Continuing execution (stop-on-error disabled).")
+                        continue  # Skip to next table
 
             # Print separator if this is not the first successful output
             if first_output_written:
@@ -2871,8 +2934,8 @@ def _add_parser_drop(subparsers: argparse._SubParsersAction):
     parser_drop = subparsers.add_parser(
         "drop",
         aliases=["drop-table"],  # Add alias
-        help="Drop one or more tables using DROP TABLE.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        help="Drop one or more tables using DROP TABLE.\nReads table names from arguments, --file, or stdin (one per line).",
+        formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
     )
     parser_drop.add_argument(
@@ -2882,9 +2945,23 @@ def _add_parser_drop(subparsers: argparse._SubParsersAction):
         default=argparse.SUPPRESS,
         help="Show this help message and exit.",
     )
-    parser_drop.add_argument(
-        "table_names", nargs="+", help="Name(s) of the table(s) to drop."
+
+    # Mutually exclusive group for table name input
+    input_group = parser_drop.add_mutually_exclusive_group(required=False)
+    input_group.add_argument(
+        "table_names",
+        nargs="*",  # Changed from '+' to '*' to make it optional
+        help="Name(s) of the table(s) to drop (provided as arguments).",
+        metavar="TABLE_NAME",
     )
+    input_group.add_argument(
+        "-f",
+        "--file",
+        help="Path to file containing table names (one per line).",
+        metavar="FILE_PATH",
+    )
+    # Implicit stdin reading if neither table_names nor --file is given
+
     # Inherits global --stop-on-error
     parser_drop.add_argument(
         "--statement-timeout",  # Allow timeout per table drop
