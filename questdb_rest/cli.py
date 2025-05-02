@@ -1490,6 +1490,7 @@ def handle_drop(args, client: QuestDBClient):
     source_description = ""
 
     # 1. Determine the source of table names and load them
+    # (Validation moved to get_args)
     if args.table_names:
         table_names_to_drop = args.table_names
         source_description = "command line arguments"
@@ -1517,7 +1518,8 @@ def handle_drop(args, client: QuestDBClient):
         logger.warning(
             "No table names provided via arguments, --file, or standard input."
         )
-        sys.exit(1)  # Exit if no tables specified
+        # Use exit code 2 for usage errors
+        sys.exit(2)
 
     if not table_names_to_drop:
         logger.warning(f"No valid table names found in {source_description}.")
@@ -1528,7 +1530,7 @@ def handle_drop(args, client: QuestDBClient):
     )
 
     # 2. Process the tables
-    any_table_failed = False
+    any_real_table_failed = False  # Track actual failures, not "not exists"
     num_tables = len(table_names_to_drop)
     json_separator = "\n"
     first_output_written = False
@@ -1537,6 +1539,8 @@ def handle_drop(args, client: QuestDBClient):
         logger.info(
             f"--- Processing DROP for table {i + 1}/{num_tables}: '{table_name}' ---"
         )
+
+        table_skipped_not_exist = False  # Flag for this specific table
 
         # --- Dry Run Check ---
         if args.dry_run:
@@ -1565,10 +1569,8 @@ def handle_drop(args, client: QuestDBClient):
                     logger.warning(
                         f"Table '{table_name}' does not exist, skipping drop."
                     )
-                    # Optionally treat "not exists" as success or failure?
-                    # For now, log warning but don't mark as failure.
-                    # If stop_on_error is false, we'd continue anyway.
-                    # Print a specific JSON status for this?
+                    table_skipped_not_exist = True
+                    # Print a specific JSON status for this
                     result = {
                         "status": "Skipped",
                         "table_name": table_name,
@@ -1579,16 +1581,17 @@ def handle_drop(args, client: QuestDBClient):
                         sys.stdout.write(json_separator)
                     print(json.dumps(result, indent=2))
                     first_output_written = True
-                    continue  # Move to the next table
+                    # Continue to the next table without marking as failure
+                    continue
 
                 else:
-                    # Handle other errors as failures
+                    # Handle other errors as real failures
                     logger.error(f"Error dropping table '{table_name}': {error_msg}")
                     sys.stderr.write(
                         f"-- Error dropping table '{table_name}' --\nError: {error_msg}\n"
                     )
                     sys.stderr.write(f"Query: {response_json.get('query', query)}\n")
-                    any_table_failed = True
+                    any_real_table_failed = True  # Mark as a real failure
                     if args.stop_on_error:
                         logger.warning(
                             "Stopping execution due to error (stop-on-error enabled)."
@@ -1598,11 +1601,12 @@ def handle_drop(args, client: QuestDBClient):
                         logger.warning("Continuing execution (stop-on-error disabled).")
                         continue  # Skip to next table
 
+            # --- Success Case ---
             # Print separator if this is not the first successful output
             if first_output_written:
                 sys.stdout.write(json_separator)
 
-            # Success case: print confirmation JSON
+            # Print confirmation JSON
             result = {
                 "status": "OK",
                 "table_dropped": table_name,
@@ -1617,20 +1621,46 @@ def handle_drop(args, client: QuestDBClient):
             logger.info(f"Table '{table_name}' dropped successfully.")
 
         except QuestDBAPIError as e:
-            logger.warning(f"Dropping table '{table_name}' failed with API error: {e}")
-            sys.stderr.write(f"-- Error dropping table '{table_name}' --\nError: {e}\n")
-            any_table_failed = True
-            if args.stop_on_error:
+            # Check if the API error itself indicates "table does not exist"
+            error_msg = str(e)
+            if "table does not exist" in error_msg.lower():
                 logger.warning(
-                    "Stopping execution due to API error (stop-on-error enabled)."
+                    f"Table '{table_name}' does not exist (API Error), skipping drop."
                 )
-                sys.exit(1)
+                table_skipped_not_exist = True
+                # Print a specific JSON status for this
+                result = {
+                    "status": "Skipped",
+                    "table_name": table_name,
+                    "message": f"Table '{table_name}' does not exist.",
+                    "error_details": error_msg,
+                }
+                if first_output_written:
+                    sys.stdout.write(json_separator)
+                print(json.dumps(result, indent=2))
+                first_output_written = True
+                # Continue to the next table without marking as failure
+                continue
             else:
-                logger.warning("Continuing execution (stop-on-error disabled).")
+                # Handle other API errors as real failures
+                logger.warning(
+                    f"Dropping table '{table_name}' failed with API error: {e}"
+                )
+                sys.stderr.write(
+                    f"-- Error dropping table '{table_name}' --\nError: {e}\n"
+                )
+                any_real_table_failed = True  # Mark as a real failure
+                if args.stop_on_error:
+                    logger.warning(
+                        "Stopping execution due to API error (stop-on-error enabled)."
+                    )
+                    sys.exit(1)
+                else:
+                    logger.warning("Continuing execution (stop-on-error disabled).")
         except QuestDBError as e:  # Catch other client errors (connection etc.)
             logger.warning(f"Dropping table '{table_name}' failed: {e}")
             sys.stderr.write(f"-- Error dropping table '{table_name}' --\nError: {e}\n")
-            any_table_failed = True
+            any_real_table_failed = True  # Mark as a real failure
             if args.stop_on_error:
                 logger.warning(
                     "Stopping execution due to error (stop-on-error enabled)."
@@ -1645,12 +1675,14 @@ def handle_drop(args, client: QuestDBClient):
             sys.exit(130)
 
     # --- Final Exit Status ---
-    if any_table_failed:
-        logger.warning("One or more tables failed to drop.")
+    if any_real_table_failed:
+        logger.warning(
+            "One or more tables failed to drop (excluding 'table does not exist')."
+        )
         sys.exit(2)  # Indicate partial failure if stop-on-error was false
     else:
         logger.info("All requested tables processed for dropping.")
-        sys.exit(0)
+        sys.exit(0)  # Exit 0 if only "not exists" skips occurred or all succeeded
 
 
 def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
