@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-
-
 #!/usr/bin/env uv run
-
 # /// script
 # requires-python = '>=3.11'
 # dependencies = [
@@ -22,7 +19,7 @@ import json
 import logging
 from getpass import getpass
 from pathlib import Path
-from typing import Callable, Dict, Any, Tuple
+from typing import Callable, Tuple
 import os  # ensure os is imported
 import re
 
@@ -39,28 +36,23 @@ from questdb_rest import (
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 9000  # Use the default from the library/docs
 # -------------------
-
 # --- Logging Setup ---
 logging.basicConfig(
-    level=logging.WARNING,
-    format="%(levelname)s: %(message)s",
-    stream=sys.stderr,
+    level=logging.WARNING, format="%(levelname)s: %(message)s", stream=sys.stderr
 )
 logger = logging.getLogger(__name__)
 # ---------------------
-
-
 # --- Table Name Generation Functions (Keep as is) ---
+
+
 def get_table_name_from_stem(p: Path, **kwargs) -> str:
     """Default: returns the filename without extension."""
     return p.stem
 
 
 def get_table_name_add_prefix(p: Path, prefix: str = "", **kwargs) -> str:
-    """Returns the filename stem with a prefix added."""
-    prefix_str = (
-        prefix  # Removed default 'import_' here, rely on arg default or presence
-    )
+    """Returns the filename stem with a prefix added."""  # Removed default 'import_' here, rely on arg default or presence
+    prefix_str = prefix
     return f"{prefix_str}{p.stem}"
 
 
@@ -69,9 +61,9 @@ TABLE_NAME_FUNCTIONS: Dict[str, Tuple[Callable[..., str], list[str]]] = {
     "add_prefix": (get_table_name_add_prefix, ["prefix"]),
 }
 # --------------------------------------
-
-
 # --- SQL Statement Extraction (Keep as is) ---
+
+
 def extract_statements_from_sql(sql_string: str) -> list[str]:
     """
     Parses a string containing one or more SQL statements using sqlparse.
@@ -113,58 +105,50 @@ def _get_schema_and_dedup_info(
         "create_statement": None,
         "error": None,
     }
-
     try:
         # 1. Check existence and current dedup status
         dedup_status_query = (
             f"SELECT dedup FROM tables() WHERE table_name = '{safe_table_name_quoted}'"
         )
         dedup_status_response = client.exec(query=dedup_status_query)
-
         if dedup_status_response.get("count", 0) == 0:
             result["error"] = "Table not found."
             return result
         result["exists"] = True
         result["is_dedup_enabled"] = dedup_status_response["dataset"][0][0]
-
         # 2. Fetch CREATE TABLE statement
         # Use double quotes for SHOW CREATE TABLE identifier as per QuestDB syntax
         safe_table_name_double_quoted = table_name.replace('"', '""')
         schema_query = f'SHOW CREATE TABLE "{safe_table_name_double_quoted}";'
         schema_response = client.exec(query=schema_query)
-
         if isinstance(schema_response, dict) and "error" in schema_response:
             raise QuestDBAPIError(
                 f"Failed to fetch schema: {schema_response['error']}",
                 response_data=schema_response,
             )
-
         if (
             isinstance(schema_response, dict)
             and schema_response.get("count", 0) > 0
-            and len(schema_response["dataset"]) > 0
-            and len(schema_response["dataset"][0]) > 0
+            and (len(schema_response["dataset"]) > 0)
+            and (len(schema_response["dataset"][0]) > 0)
         ):
             result["create_statement"] = schema_response["dataset"][0][0]
         else:
             result["error"] = "Could not retrieve CREATE TABLE statement."
             return result  # Cannot parse further
-
         # 3. Parse CREATE TABLE statement
         create_statement = result["create_statement"]
-
         # Parse Designated Timestamp (TIMESTAMP(...))
         ts_match = re.search(
-            r"TIMESTAMP\s*\(([^)]+)\)", create_statement, re.IGNORECASE
+            "TIMESTAMP\\s*\\(([^)]+)\\)", create_statement, re.IGNORECASE
         )
         if ts_match:
             # Strip potential quotes if column name was quoted, handle case
             result["designated_timestamp"] = ts_match.group(1).strip("\"`'")
-
         # Parse Upsert Keys (DEDUP UPSERT KEYS(...)) - only relevant if currently enabled
         if result["is_dedup_enabled"]:
             keys_match = re.search(
-                r"DEDUP UPSERT KEYS\s*\(([^)]+)\)", create_statement, re.IGNORECASE
+                "DEDUP UPSERT KEYS\\s*\\(([^)]+)\\)", create_statement, re.IGNORECASE
             )
             if keys_match:
                 keys_str = keys_match.group(1)
@@ -178,331 +162,269 @@ def _get_schema_and_dedup_info(
                     f"Deduplication reported enabled for '{table_name}', but DEDUP clause not found in schema. Schema might be inconsistent or parsing failed."
                 )
                 result["upsert_keys"] = []  # Indicate keys couldn't be parsed
-
     except (QuestDBError, IndexError, KeyError, TypeError) as e:
         result["error"] = f"Failed to get table/schema info: {e}"
-
     return result
 
 
 def handle_dedupe(args, client: QuestDBClient):
-    """Handles the dedupe command for enabling/disabling/checking deduplication."""
-    table_name = args.table_name
-    safe_table_name_quoted = table_name.replace(
-        "'", "''"
-    )  # Quote for queries like ALTER
-
-    # --- Dry Run Check ---
-    if args.dry_run:
-        simulate_dedupe(args, table_name)
+    """Handles the dedupe command for enabling/disabling/checking deduplication on multiple tables."""
+    table_names_to_process = []
+    source_description = ""
+    # 1. Determine the source of table names (validation in get_args)
+    if args.table_names:
+        table_names_to_process = args.table_names
+        source_description = "command line arguments"
+    elif args.file:
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                table_names_to_process = [
+                    line.strip() for line in f if line.strip()
+                ]  # Read non-empty lines
+            source_description = f"file '{args.file}'"
+        except IOError as e:
+            logger.warning(f"Error reading table names file '{args.file}': {e}")
+            sys.exit(1)
+    elif not sys.stdin.isatty():
+        logger.info("Reading table names from standard input (one per line)...")
+        try:
+            table_names_to_process = [
+                line.strip() for line in sys.stdin if line.strip()
+            ]  # Read non-empty lines
+            source_description = "standard input"
+        except Exception as e:
+            logger.warning(f"Error reading table names from stdin: {e}")
+            sys.exit(1)
+    else:
+        # This case should be caught by validation in get_args
+        logger.error("Internal error: No table names source identified.")
+        sys.exit(2)
+    if not table_names_to_process:
+        logger.warning(f"No valid table names found in {source_description}.")
         sys.exit(0)
-
+    # Determine action
     action = "check"
     if args.enable:
         action = "enable"
     elif args.disable:
         action = "disable"
-
-    logger.info(f"Performing dedupe action '{action}' for table '{table_name}'...")
-
-    try:
-        # --- Get Current State ---
-        logger.debug(f"Fetching current status and schema for '{table_name}'...")
-        table_info = _get_schema_and_dedup_info(
-            client, table_name, safe_table_name_quoted
+    logger.info(
+        f"Processing {len(table_names_to_process)} table(s) from {source_description} for dedupe action '{action}'."
+    )
+    any_table_failed = False
+    num_tables = len(table_names_to_process)
+    json_separator = "\n"
+    first_output_written = False
+    for i, table_name in enumerate(table_names_to_process):
+        logger.info(
+            f"--- Processing dedupe action '{action}' for table {i + 1}/{num_tables}: '{table_name}' ---"
         )
-
-        if table_info.get("error"):
-            logger.error(f"Error getting table info: {table_info['error']}")
-            print(
-                json.dumps(
-                    {
-                        "status": "Error",
-                        "table_name": table_name,
-                        "action": action,
-                        "message": table_info["error"],
-                    },
-                    indent=2,
-                )
+        safe_table_name_quoted = table_name.replace(
+            "'", "''"
+        )  # Quote for queries like ALTER
+        # --- Dry Run Check ---
+        if args.dry_run:
+            simulate_dedupe(args, table_name, i + 1, num_tables)
+            if first_output_written:  # Print separator if not first dry-run output
+                sys.stdout.write(json_separator)
+            first_output_written = True
+            continue  # Skip actual execution
+        # --- Process Single Table ---
+        try:
+            # --- Get Current State (needed for check, enable validation) ---
+            logger.debug(f"Fetching current status and schema for '{table_name}'...")
+            table_info = _get_schema_and_dedup_info(
+                client, table_name, safe_table_name_quoted
             )
-            # Use different exit code for not found vs other errors?
-            sys.exit(4 if "not found" in table_info["error"].lower() else 1)
-
-        is_dedup_enabled = table_info["is_dedup_enabled"]
-        designated_ts_col = table_info["designated_timestamp"]
-        current_upsert_keys = table_info["upsert_keys"]
-
-        # --- Perform Action ---
-        if action == "enable":
-            if not args.upsert_keys:
-                # This check is also done by argparse, but double-check here
-                logger.error("Error: --upsert-keys must be provided with --enable.")
-                print(
-                    json.dumps(
-                        {
-                            "status": "Error",
-                            "table_name": table_name,
-                            "action": "enable",
-                            "message": "--upsert-keys argument is required.",
-                        },
-                        indent=2,
-                    )
-                )
-                sys.exit(1)
-
-            if not designated_ts_col:
-                # Should have been caught by _get_schema_and_dedup_info if schema was fetched
+            if table_info.get("error"):
                 logger.error(
-                    f"Could not determine designated timestamp for table '{table_name}' from schema. Cannot validate upsert keys."
+                    f"Error getting info for table '{table_name}': {table_info['error']}"
                 )
-                print(
-                    json.dumps(
-                        {
-                            "status": "Error",
-                            "table_name": table_name,
-                            "action": "enable",
-                            "message": "Could not determine designated timestamp from schema.",
-                        },
-                        indent=2,
+                result = {
+                    "status": "Error",
+                    "table_name": table_name,
+                    "action": action,
+                    "message": table_info["error"],
+                }
+                if first_output_written:
+                    sys.stdout.write(json_separator)
+                print(json.dumps(result, indent=2))
+                first_output_written = True
+                any_table_failed = True
+                if args.stop_on_error:
+                    logger.warning(
+                        "Stopping execution due to error (stop-on-error enabled)."
                     )
-                )
-                sys.exit(1)
-
-            logger.info(
-                f"Designated timestamp column from schema: '{designated_ts_col}'"
-            )
-
-            # Validate designated timestamp is included
-            # Compare case-insensitively? QuestDB identifiers are case-insensitive unless quoted.
-            # Let's assume provided keys and parsed TS are canonical (e.g., lowercase or as-is) for now.
-            # Or convert both to lower for comparison:
-            provided_keys_lower = {k.lower() for k in args.upsert_keys}
-            if designated_ts_col.lower() not in provided_keys_lower:
-                logger.error(
-                    f"Error: Designated timestamp column '{designated_ts_col}' must be included in --upsert-keys."
-                )
-                print(
-                    json.dumps(
-                        {
-                            "status": "Error",
-                            "table_name": table_name,
-                            "action": "enable",
-                            "message": f"Designated timestamp column '{designated_ts_col}' must be included in upsert keys.",
-                            "provided_keys": args.upsert_keys,
-                        },
-                        indent=2,
-                    )
-                )
-                sys.exit(1)
-
-            keys_str = ", ".join(
-                args.upsert_keys
-            )  # Keys are not quoted inside parentheses in ALTER syntax
-            enable_query = f"ALTER TABLE '{safe_table_name_quoted}' DEDUP ENABLE UPSERT KEYS({keys_str});"
-            logger.debug(f"Executing: {enable_query}")
-            response_json = client.exec(
-                query=enable_query, statement_timeout=args.statement_timeout
-            )
-
-            if isinstance(response_json, dict) and "error" in response_json:
-                error_msg = response_json["error"]
-                # Check if the error indicates non-WAL table
-                if "table is not WAL" in error_msg.lower():
-                    logger.error(
-                        f"Error enabling deduplication: Table '{table_name}' is not WAL-enabled."
-                    )
-                    print(
-                        json.dumps(
-                            {
-                                "status": "Error",
-                                "table_name": table_name,
-                                "action": "enable",
-                                "message": f"Table is not WAL-enabled. {error_msg}",
-                                "query": response_json.get("query", enable_query),
-                            },
-                            indent=2,
-                        )
-                    )
+                    sys.exit(1)
                 else:
-                    logger.error(
-                        f"Error enabling deduplication for '{table_name}': {error_msg}"
+                    continue  # Skip to next table
+            is_dedup_enabled = table_info["is_dedup_enabled"]
+            designated_ts_col = table_info["designated_timestamp"]
+            current_upsert_keys = table_info["upsert_keys"]
+            result = None  # Initialize result for this table
+            # --- Perform Action ---
+            if action == "enable":
+                # Validation (keys provided globally via args, timestamp from schema)
+                if not args.upsert_keys:
+                    # Should be caught by get_args, but double-check
+                    raise ValueError("--upsert-keys must be provided with --enable.")
+                if not designated_ts_col:
+                    raise ValueError(
+                        f"Could not determine designated timestamp for table '{table_name}' from schema. Cannot enable."
                     )
-                    print(
-                        json.dumps(
-                            {
-                                "status": "Error",
-                                "table_name": table_name,
-                                "action": "enable",
-                                "message": error_msg,
-                                "query": response_json.get("query", enable_query),
-                            },
-                            indent=2,
-                        )
-                    )
-                sys.exit(1)
-            else:
                 logger.info(
-                    f"Successfully enabled deduplication for '{table_name}' with keys: {args.upsert_keys}."
+                    f"Designated timestamp column from schema: '{designated_ts_col}'"
                 )
-                print(
-                    json.dumps(
-                        {
-                            "status": "OK",
-                            "table_name": table_name,
-                            "action": "enable",
-                            "deduplication_enabled": True,
-                            "upsert_keys": args.upsert_keys,
-                            "ddl": response_json.get("ddl")
-                            if isinstance(response_json, dict)
-                            else None,
-                        },
-                        indent=2,
+                provided_keys_lower = {k.lower() for k in args.upsert_keys}
+                if designated_ts_col.lower() not in provided_keys_lower:
+                    raise ValueError(
+                        f"Designated timestamp column '{designated_ts_col}' must be included in --upsert-keys."
                     )
+                keys_str = ", ".join(args.upsert_keys)
+                enable_query = f"ALTER TABLE '{safe_table_name_quoted}' DEDUP ENABLE UPSERT KEYS({keys_str});"
+                logger.debug(f"Executing: {enable_query}")
+                response_json = client.exec(
+                    query=enable_query, statement_timeout=args.statement_timeout
                 )
-                sys.exit(0)
-
-        elif action == "disable":
-            disable_query = f"ALTER TABLE '{safe_table_name_quoted}' DEDUP DISABLE;"
-            logger.debug(f"Executing: {disable_query}")
-            response_json = client.exec(
-                query=disable_query, statement_timeout=args.statement_timeout
-            )
-
-            if isinstance(response_json, dict) and "error" in response_json:
-                error_msg = response_json["error"]
-                if "table is not WAL" in error_msg.lower():
-                    logger.error(
-                        f"Error disabling deduplication: Table '{table_name}' is not WAL-enabled."
-                    )
-                    print(
-                        json.dumps(
-                            {
-                                "status": "Error",
-                                "table_name": table_name,
-                                "action": "disable",
-                                "message": f"Table is not WAL-enabled. {error_msg}",
-                                "query": response_json.get("query", disable_query),
-                            },
-                            indent=2,
-                        )
+                if isinstance(response_json, dict) and "error" in response_json:
+                    error_msg = response_json["error"]
+                    # Check specific errors like non-WAL
+                    if "table is not WAL" in error_msg.lower():
+                        message = f"Table is not WAL-enabled. {error_msg}"
+                    else:
+                        message = error_msg
+                    raise QuestDBAPIError(
+                        f"Failed to enable deduplication: {message}",
+                        response_data=response_json,
                     )
                 else:
-                    logger.error(
-                        f"Error disabling deduplication for '{table_name}': {error_msg}"
+                    logger.info(
+                        f"Successfully enabled deduplication for '{table_name}' with keys: {args.upsert_keys}."
                     )
-                    print(
-                        json.dumps(
-                            {
-                                "status": "Error",
-                                "table_name": table_name,
-                                "action": "disable",
-                                "message": error_msg,
-                                "query": response_json.get("query", disable_query),
-                            },
-                            indent=2,
-                        )
-                    )
-                sys.exit(1)
-            else:
-                logger.info(f"Successfully disabled deduplication for '{table_name}'.")
-                print(
-                    json.dumps(
-                        {
-                            "status": "OK",
-                            "table_name": table_name,
-                            "action": "disable",
-                            "deduplication_enabled": False,
-                            "ddl": response_json.get("ddl")
-                            if isinstance(response_json, dict)
-                            else None,
-                        },
-                        indent=2,
-                    )
+                    result = {
+                        "status": "OK",
+                        "table_name": table_name,
+                        "action": "enable",
+                        "deduplication_enabled": True,
+                        "upsert_keys": args.upsert_keys,
+                        "ddl": response_json.get("ddl")
+                        if isinstance(response_json, dict)
+                        else None,
+                    }
+            elif action == "disable":
+                disable_query = f"ALTER TABLE '{safe_table_name_quoted}' DEDUP DISABLE;"
+                logger.debug(f"Executing: {disable_query}")
+                response_json = client.exec(
+                    query=disable_query, statement_timeout=args.statement_timeout
                 )
-                sys.exit(0)
-
-        elif action == "check":
-            # Information already fetched by _get_schema_and_dedup_info
-            result = {
-                "status": "OK",
-                "table_name": table_name,
-                "action": "check",
-                "deduplication_enabled": is_dedup_enabled,
-                "designated_timestamp": designated_ts_col,
+                if isinstance(response_json, dict) and "error" in response_json:
+                    error_msg = response_json["error"]
+                    if "table is not WAL" in error_msg.lower():
+                        message = f"Table is not WAL-enabled. {error_msg}"
+                    else:
+                        message = error_msg
+                    raise QuestDBAPIError(
+                        f"Failed to disable deduplication: {message}",
+                        response_data=response_json,
+                    )
+                else:
+                    logger.info(
+                        f"Successfully disabled deduplication for '{table_name}'."
+                    )
+                    result = {
+                        "status": "OK",
+                        "table_name": table_name,
+                        "action": "disable",
+                        "deduplication_enabled": False,
+                        "ddl": response_json.get("ddl")
+                        if isinstance(response_json, dict)
+                        else None,
+                    }
+            elif action == "check":
+                # Information already fetched
                 # Only include keys if dedup is actually enabled and keys were parsed
-                "upsert_keys": current_upsert_keys if is_dedup_enabled else None,
+                result = {
+                    "status": "OK",
+                    "table_name": table_name,
+                    "action": "check",
+                    "deduplication_enabled": is_dedup_enabled,
+                    "designated_timestamp": designated_ts_col,
+                    "upsert_keys": current_upsert_keys if is_dedup_enabled else None,
+                }
+                if is_dedup_enabled and current_upsert_keys is None:
+                    result["warning"] = (
+                        "Deduplication is enabled, but failed to parse UPSERT KEYS from schema."
+                    )
+                logger.info(f"Check Result - Deduplication enabled: {is_dedup_enabled}")
+                if is_dedup_enabled:
+                    logger.info(f"  Designated Timestamp: {designated_ts_col}")
+                    logger.info(f"  Upsert keys: {current_upsert_keys}")
+            # Print result for the current table
+            if result:
+                if first_output_written:
+                    sys.stdout.write(json_separator)
+                print(json.dumps(result, indent=2))
+                first_output_written = True
+        except (QuestDBAPIError, QuestDBError, ValueError) as e:
+            logger.error(
+                f"Error during dedupe '{action}' operation for '{table_name}': {e}"
+            )
+            error_details = getattr(e, "response_data", None)
+            result = {
+                "status": "Error",
+                "table_name": table_name,
+                "action": action,
+                "message": str(e),
+                "details": error_details,
             }
-            # Add a message if keys couldn't be parsed but dedup is enabled
-            if is_dedup_enabled and current_upsert_keys is None:
-                result["warning"] = (
-                    "Deduplication is enabled, but failed to parse UPSERT KEYS from schema."
-                )
-
-            logger.info(f"Deduplication enabled: {is_dedup_enabled}")
-            if is_dedup_enabled:
-                logger.info(f"Designated Timestamp: {designated_ts_col}")
-                logger.info(f"Upsert keys: {current_upsert_keys}")
+            if first_output_written:
+                sys.stdout.write(json_separator)
             print(json.dumps(result, indent=2))
-            sys.exit(0)
-
-    except QuestDBAPIError as e:
-        # Catch errors from underlying client.exec calls if not caught within action blocks
-        logger.error(f"API Error during dedupe operation for '{table_name}': {e}")
-        print(
-            json.dumps(
-                {
-                    "status": "Error",
-                    "table_name": table_name,
-                    "action": action,
-                    "message": str(e),
-                    "details": e.response_data,
-                },
-                indent=2,
-            )
-        )
-        sys.exit(1)
-    except QuestDBError as e:
-        logger.error(f"Error during dedupe operation for '{table_name}': {e}")
-        print(
-            json.dumps(
-                {
-                    "status": "Error",
-                    "table_name": table_name,
-                    "action": action,
-                    "message": str(e),
-                },
-                indent=2,
-            )
-        )
-        sys.exit(1)
-    except KeyboardInterrupt:
-        logger.info("\nOperation cancelled by user.")
-        sys.exit(130)
+            first_output_written = True
+            any_table_failed = True
+            if args.stop_on_error:
+                logger.warning(
+                    "Stopping execution due to error (stop-on-error enabled)."
+                )
+                sys.exit(1)
+            # else: continue to next table is implicit loop continuation
+        except KeyboardInterrupt:
+            logger.info("\nOperation cancelled by user.")
+            sys.exit(130)
+    # --- Final Exit Status ---
+    if any_table_failed:
+        logger.warning(f"One or more tables failed during dedupe '{action}' operation.")
+        sys.exit(2)  # Indicate partial failure
+    else:
+        logger.info(f"All tables processed successfully for dedupe '{action}'.")
+        sys.exit(0)
 
 
-def simulate_dedupe(args, table_name):
-    """Simulates the dedupe command based on parsing schema."""
-    logger.info(f"[DRY-RUN] Simulating dedupe operation for table '{table_name}':")
+def simulate_dedupe(args, table_name, index, total):
+    """Simulates the dedupe command for a single table."""
+    logger.info(
+        f"[DRY-RUN] Simulating dedupe operation ({index}/{total}) for table '{table_name}':"
+    )
     action = "check"  # Default action
     if args.enable:
         action = "enable"
     elif args.disable:
         action = "disable"
-
     logger.info(f"[DRY-RUN]   Action: {action}")
-
     # Simulate fetching info (assume table exists and is basic WAL table for simulation)
     simulated_dedup_enabled = False  # Assume disabled initially for simulation clarity
     simulated_ts = "ts"  # Assume 'ts' as designated timestamp
     simulated_keys = None
     simulated_create_statement = f"CREATE TABLE '{table_name}' (ts TIMESTAMP, val DOUBLE) TIMESTAMP(ts) PARTITION BY DAY WAL;"
-
-    logger.info(f"[DRY-RUN]   Simulating fetch of current status and schema...")
+    logger.info("[DRY-RUN]   Simulating fetch of current status and schema...")
     logger.info(f"[DRY-RUN]     Assuming Dedup Enabled: {simulated_dedup_enabled}")
     logger.info(f"[DRY-RUN]     Assuming Designated Timestamp: {simulated_ts}")
-
-    simulated_result = {"dry_run": True, "table_name": table_name, "action": action}
-
+    simulated_result = {
+        "dry_run": True,
+        "table_name": table_name,
+        "action": action,
+        "status": "OK (Simulated)",
+    }  # Assume OK unless error
     if action == "enable":
         if not args.upsert_keys:
             logger.error("[DRY-RUN] Error: --upsert-keys are required for --enable.")
@@ -522,34 +444,28 @@ def simulate_dedupe(args, table_name):
             safe_table_name_quoted = table_name.replace("'", "''")
             query = f"ALTER TABLE '{safe_table_name_quoted}' DEDUP ENABLE UPSERT KEYS({keys_str});"
             logger.info(f"[DRY-RUN]   Would execute: {query}")
-            simulated_result["status"] = "OK (Simulated)"
             simulated_result["upsert_keys_set"] = args.upsert_keys
             simulated_result["ddl"] = "OK (Simulated)"
             simulated_result["message"] = "Deduplication would be enabled."
-
     elif action == "disable":
         # Quote table name for ALTER statement
         safe_table_name_quoted = table_name.replace("'", "''")
         query = f"ALTER TABLE '{safe_table_name_quoted}' DEDUP DISABLE;"
         logger.info(f"[DRY-RUN]   Would execute: {query}")
-        simulated_result["status"] = "OK (Simulated)"
         simulated_result["ddl"] = "OK (Simulated)"
         simulated_result["message"] = "Deduplication would be disabled."
-
     elif action == "check":
         logger.info(
-            f"[DRY-RUN]   Simulating check result based on assumed initial state."
+            "[DRY-RUN]   Simulating check result based on assumed initial state."
         )
-        simulated_result["status"] = "OK (Simulated)"
         simulated_result["deduplication_enabled"] = simulated_dedup_enabled
-        simulated_result["designated_timestamp"] = simulated_ts
-        simulated_result["upsert_keys"] = (
-            simulated_keys  # Will be None if simulated_dedup_enabled is False
+        simulated_result["designated_timestamp"] = (
+            simulated_ts  # Will be None if simulated_dedup_enabled is False
         )
+        simulated_result["upsert_keys"] = simulated_keys
         simulated_result["message"] = (
             f"Checked status (Simulated: enabled={simulated_dedup_enabled})."
         )
-
     print(json.dumps(simulated_result, indent=2))
 
 
@@ -559,17 +475,14 @@ def simulate_rename(args, client):
     new_name = args.new_table_name
     safe_old_name = old_name.replace("'", "''")
     safe_new_name = new_name.replace("'", "''")
-
     logger.info("[DRY-RUN] Simulating rename operation:")
     logger.info(f"[DRY-RUN]   From: '{old_name}'")
     logger.info(f"[DRY-RUN]   To:   '{new_name}'")
-
     # Simulate checking if the *new* table name exists
     logger.info(
         f"[DRY-RUN]   1. Checking if target table '{new_name}' exists... (Assuming Yes for backup simulation)"
     )
     new_table_exists = True  # Assume exists to simulate backup path
-
     backup_name = None
     if new_table_exists:
         if args.no_backup_if_new_table_exists:
@@ -597,13 +510,11 @@ def simulate_rename(args, client):
         logger.info(
             f"[DRY-RUN]   2. Target table '{new_name}' does not exist. No backup needed."
         )
-
     # Simulate the final rename
-    logger.info(f"[DRY-RUN]   3. Renaming original table to target name.")
+    logger.info("[DRY-RUN]   3. Renaming original table to target name.")
     logger.info(
         f"[DRY-RUN]      Would execute: RENAME TABLE '{safe_old_name}' TO '{safe_new_name}';"
     )
-
     # Output simulated success response
     result = {
         "dry_run": True,
@@ -612,7 +523,7 @@ def simulate_rename(args, client):
         "old_name": old_name,
         "new_name": new_name,
         "backup_of_new_name": backup_name
-        if new_table_exists and not args.no_backup_if_new_table_exists
+        if new_table_exists and (not args.no_backup_if_new_table_exists)
         else None,
     }
     print(json.dumps(result, indent=2))
@@ -620,6 +531,8 @@ def simulate_rename(args, client):
 
 
 # Update simulate_create_or_replace to reflect the new workflow
+
+
 def simulate_create_or_replace(args, query):
     """Simulates the create-or-replace-table-from-query command (temp table workflow)."""
     target_table = args.table
@@ -631,10 +544,9 @@ def simulate_create_or_replace(args, query):
     )
     logger.info(f"[DRY-RUN]   Target Table: '{target_table}'")
     logger.info(
-        f"[DRY-RUN]   Query Source: (provided via args/stdin)"
+        "[DRY-RUN]   Query Source: (provided via args/stdin)"
     )  # Simplification
     logger.info(f"[DRY-RUN]   Temporary Table Name: '{temp_table_name}'")
-
     # Simulate CREATE TEMP TABLE statement construction
     create_parts = [
         f"CREATE TABLE {temp_table_name} AS ({query})"
@@ -647,13 +559,11 @@ def simulate_create_or_replace(args, query):
         create_parts.append(f"PARTITION BY {args.partitionBy}")
     create_statement = " ".join(create_parts) + ";"
     logger.info(f"[DRY-RUN]   1. Would execute: {create_statement}")
-
     # Simulate checking if target table exists (assume it exists for backup simulation)
     logger.info(
         f"[DRY-RUN]   2. Checking if target table '{target_table}' exists... (Assuming Yes)"
     )
     original_exists = True  # Assume exists for simulation
-
     backup_name = None
     if original_exists:
         if args.no_backup_original_table:
@@ -685,14 +595,12 @@ def simulate_create_or_replace(args, query):
         logger.info(
             f"[DRY-RUN]   3. Target table '{target_table}' does not exist. No backup/drop needed."
         )
-
     # Simulate final RENAME
-    logger.info(f"[DRY-RUN]   4. Renaming temporary table to target table.")
+    logger.info("[DRY-RUN]   4. Renaming temporary table to target table.")
     # Use correct quoting (single quotes) for RENAME TABLE identifiers
     logger.info(
         f"[DRY-RUN]      Would execute: RENAME TABLE '{temp_table_name}' TO '{target_table}';"
     )
-
     # Simulate success response
     print(
         json.dumps(
@@ -703,7 +611,7 @@ def simulate_create_or_replace(args, query):
                 "target_table": target_table,
                 "status": "OK (Simulated)",
                 "backup_table": backup_name
-                if original_exists and not args.no_backup_original_table
+                if original_exists and (not args.no_backup_original_table)
                 else None,
                 "original_dropped_no_backup": original_exists
                 and args.no_backup_original_table,
@@ -740,7 +648,7 @@ def simulate_imp(args, file_path, table_name, schema_source):
     filtered_params = {k: v for k, v in params.items() if v is not None}
     logger.info(f"[DRY-RUN]   Params: {filtered_params}")
     # Simulate successful response structure based on fmt
-    if args.fmt == "json":
+    if args.fmt == "json":  # Cannot simulate columns without parsing file
         print(
             json.dumps(
                 {
@@ -753,15 +661,15 @@ def simulate_imp(args, file_path, table_name, schema_source):
                     "header": bool(args.forceHeader)
                     if args.forceHeader is not None
                     else False,
-                    "columns": [],  # Cannot simulate columns without parsing file
+                    "columns": [],
                 },
                 indent=2,
             )
         )
     else:  # tabular
         print(f"+--- [DRY-RUN] Import Simulation for {table_name} ---+")
-        print(f"| Status: OK (Simulated)")
-        print(f"+----------------------------------------------------+")
+        print("| Status: OK (Simulated)")
+        print("+----------------------------------------------------+")
 
 
 def simulate_exec(args, statement, statement_index, total_statements):
@@ -806,21 +714,33 @@ def simulate_exp(args):
     print('"simulated_val1","simulated_val2"')
 
 
-def simulate_chk(args):
-    logger.info("[DRY-RUN] Simulating /chk request:")
-    params = {"f": "json", "j": args.table_name, "version": "2"}
+def simulate_chk(args, table_name, index, total):
+    """Simulates the chk command for a single table."""
+    logger.info(f"[DRY-RUN] Simulating /chk request ({index}/{total}):")
+    logger.info(f"[DRY-RUN]   Table Name: '{table_name}'")
+    params = {"f": "json", "j": table_name, "version": "2"}
     logger.info(f"[DRY-RUN]   Params: {params}")
     # Simulate 'Exists' for predictability in dry-run
-    print(json.dumps({"dry_run": True, "status": "Exists (Simulated)"}, indent=2))
+    print(
+        json.dumps(
+            {"dry_run": True, "tableName": table_name, "status": "Exists (Simulated)"},
+            indent=2,
+        )
+    )
 
 
-def simulate_schema(args, table_name):
-    logger.info(f"[DRY-RUN] Simulating schema fetch for table '{table_name}':")
-    query = f'SHOW CREATE TABLE "{table_name}";'  # Quote table name
+def simulate_schema(args, table_name, index, total):
+    """Simulates the schema command for a single table."""
+    logger.info(
+        f"[DRY-RUN] Simulating schema fetch ({index}/{total}) for table '{table_name}':"
+    )
+    # Use double quotes for SHOW CREATE TABLE identifier
+    safe_table_name_double_quoted = table_name.replace('"', '""')
+    query = f'SHOW CREATE TABLE "{safe_table_name_double_quoted}";'
     logger.info(f"[DRY-RUN]   Would execute query: {query}")
     # Simulate the output format: just the CREATE TABLE statement string
     print(
-        f'CREATE TABLE "{table_name}" (ts TIMESTAMP, val DOUBLE) TIMESTAMP(ts) PARTITION BY DAY; -- (Simulated)'
+        f'CREATE TABLE "{safe_table_name_double_quoted}" (ts TIMESTAMP, val DOUBLE) TIMESTAMP(ts) PARTITION BY DAY; -- (Simulated)'
     )
 
 
@@ -832,7 +752,6 @@ def handle_imp(args, client: QuestDBClient):
     any_file_failed = False
     num_files = len(args.files)
     json_separator = "\n"
-
     # Process the shortcut flag for table name derivation
     if args.derive_table_name_from_filename_stem_and_replace_dash_with_underscore:
         # If the shortcut flag is set, configure its component options
@@ -841,11 +760,9 @@ def handle_imp(args, client: QuestDBClient):
         logger.info(
             "Using shortcut flag: Setting name_func=stem and dash_to_underscore=True"
         )
-
     schema_content = None
     schema_file_obj = None
     schema_source_desc = None  # For logging
-
     try:
         # --- Prepare Schema (once if provided) ---
         if args.schema:
@@ -861,15 +778,12 @@ def handle_imp(args, client: QuestDBClient):
             except IOError as e:
                 logger.warning(f"Error opening schema file '{args.schema_file}': {e}")
                 sys.exit(1)  # Cannot proceed if schema file is required but unreadable
-
         # --- Iterate Through Input Files ---
         for i, file_path_str in enumerate(args.files):
             file_path = Path(file_path_str)
             logger.info(f"--- Processing file {i + 1}/{num_files}: '{file_path}' ---")
-
             # --- Determine Table Name ---
             final_table_name = args.name  # Start with explicitly provided name
-
             if not final_table_name:  # Only derive if --name was not provided
                 derived_table_name = None
                 if args.name_func:
@@ -910,7 +824,6 @@ def handle_imp(args, client: QuestDBClient):
                     logger.info(
                         f"Using default naming (file stem) -> derived name: '{derived_table_name}'"
                     )
-
                 if not derived_table_name:
                     logger.error(
                         f"Could not derive table name for file '{file_path}'. Skipping."
@@ -919,12 +832,8 @@ def handle_imp(args, client: QuestDBClient):
                     if args.stop_on_error:
                         sys.exit(1)
                     else:
-                        continue  # Skip this file
-
-                final_table_name = (
-                    derived_table_name  # Assign derived name as the final name for now
-                )
-
+                        continue  # Skip this file  # Assign derived name as the final name for now
+                final_table_name = derived_table_name
                 # --- Apply dash-to-underscore conversion if requested ---
                 if args.dash_to_underscore:
                     original_derived_name = final_table_name
@@ -937,7 +846,6 @@ def handle_imp(args, client: QuestDBClient):
                         logger.debug(
                             f"Dash-to-underscore requested, but derived name '{final_table_name}' contains no dashes."
                         )
-
             else:  # --name was explicitly provided
                 logger.info(
                     f"Using explicitly provided table name: '{final_table_name}'"
@@ -946,7 +854,6 @@ def handle_imp(args, client: QuestDBClient):
                     logger.warning(
                         "Ignoring --dash-to-underscore because explicit --name was provided."
                     )
-
             # --- Final check on table name validity ---
             if not final_table_name:
                 logger.error(
@@ -957,7 +864,6 @@ def handle_imp(args, client: QuestDBClient):
                     sys.exit(1)
                 else:
                     continue  # Skip this file
-
             # --- Dry Run Check ---
             if args.dry_run:
                 simulate_imp(args, file_path, final_table_name, schema_source_desc)
@@ -965,23 +871,23 @@ def handle_imp(args, client: QuestDBClient):
                 if i > 0 and args.fmt == "json":
                     sys.stdout.write(json_separator)
                 continue  # Skip actual import in dry-run
-
             # --- Make the Request via Client ---
             data_file_obj_for_request = None
             try:
                 # Open data file just before the request
                 data_file_obj_for_request = open(file_path, "rb")
-
                 logger.info(
                     f"Importing '{file_path}' into table '{final_table_name}'..."
-                )
-
+                )  # Pass filename explicitly
+                # Pass prepared schema string
+                # Pass prepared schema file obj
+                # Use the final calculated name
                 response = client.imp(
                     data_file_obj=data_file_obj_for_request,
-                    data_file_name=file_path.name,  # Pass filename explicitly
-                    schema_json_str=schema_content,  # Pass prepared schema string
-                    schema_file_obj=schema_file_obj,  # Pass prepared schema file obj
-                    table_name=final_table_name,  # Use the final calculated name
+                    data_file_name=file_path.name,
+                    schema_json_str=schema_content,
+                    schema_file_obj=schema_file_obj,
+                    table_name=final_table_name,
                     partition_by=args.partitionBy,
                     timestamp_col=args.timestamp,
                     overwrite=args.overwrite,
@@ -994,12 +900,10 @@ def handle_imp(args, client: QuestDBClient):
                     max_uncommitted_rows=args.maxUncommittedRows,
                     create_table=args.create,
                 )
-
                 # --- Process Response ---
                 import_failed_this_file = False
                 response_text = ""
                 response_json = None
-
                 try:
                     if args.fmt == "json":
                         response_json = response.json()
@@ -1015,7 +919,6 @@ def handle_imp(args, client: QuestDBClient):
                                 logger.warning(
                                     f"Column Errors: {response_json['errors']}"
                                 )
-
                     else:  # Tabular format
                         response_text = response.text
                         # Basic check for tabular failure (less reliable) - might need improvement
@@ -1028,7 +931,6 @@ def handle_imp(args, client: QuestDBClient):
                         #     logger.warning(
                         #         f"Import of '{file_path}' may have failed (status code: {response.status_code})."
                         #     )
-
                 except json.JSONDecodeError:
                     import_failed_this_file = True
                     logger.warning(
@@ -1038,19 +940,16 @@ def handle_imp(args, client: QuestDBClient):
                     logger.warning(
                         f"Raw response: {response_text[:500]}"
                     )  # Log first 500 chars
-
                 # --- Output Response ---
                 if i > 0 and args.fmt == "json":
                     sys.stdout.write(json_separator)
-
                 if args.fmt == "json" and response_json is not None:
                     json.dump(response_json, sys.stdout, indent=2)
                     sys.stdout.write("\n")
                 else:
                     sys.stdout.write(response_text)
-                    if response_text and not response_text.endswith("\n"):
+                    if response_text and (not response_text.endswith("\n")):
                         sys.stdout.write("\n")
-
                 # --- Handle Failure ---
                 if import_failed_this_file:
                     any_file_failed = True
@@ -1061,7 +960,6 @@ def handle_imp(args, client: QuestDBClient):
                         sys.exit(1)
                 else:
                     logger.info(f"File '{file_path}' processed.")
-
             except (
                 QuestDBError,
                 OSError,
@@ -1085,12 +983,10 @@ def handle_imp(args, client: QuestDBClient):
                 # Close data file if it was opened
                 if data_file_obj_for_request:
                     data_file_obj_for_request.close()
-
     finally:
         # Close schema file if it was opened
         if schema_file_obj:
             schema_file_obj.close()
-
     # --- Final Exit Status ---
     if any_file_failed:
         logger.warning("One or more files failed during import.")
@@ -1106,7 +1002,6 @@ def handle_exec(args, client: QuestDBClient):
 
     sql_content = ""
     source_description = ""
-
     # New: load query from a Python module if specified
     if args.get_query_from_python_module:
         try:
@@ -1158,31 +1053,25 @@ def handle_exec(args, client: QuestDBClient):
     else:
         logger.warning("No SQL query provided via argument, file, module, or stdin.")
         sys.exit(1)
-
     # 2. Extract Statements (same as before)
     try:
         statements = extract_statements_from_sql(sql_content)
     except Exception as e:
         logger.error(f"Failed to parse SQL from {source_description}: {e}")
         sys.exit(1)
-
     if not statements:
         logger.warning(f"No valid SQL statements found in {source_description}.")
         sys.exit(0)
-
     logger.info(f"Found {len(statements)} statement(s) in {source_description}.")
-
     any_statement_failed = False
     json_separator = "\n"  # Separator between JSON outputs for multiple statements
     markdown_psql_separator = "\n\n"  # Separator for markdown/psql tables
     output_separator = ""  # Will be set based on output format
-
     # Determine the separator based on the output format requested
     if args.markdown or args.psql:
         output_separator = markdown_psql_separator
     elif not args.one:  # Default JSON output uses newline
         output_separator = json_separator
-
     # 3. Execute Statements Iteratively
     first_output_written = False
     for i, statement in enumerate(statements):
@@ -1195,9 +1084,8 @@ def handle_exec(args, client: QuestDBClient):
             assert new_table_name, "New table name must be provided for --create-table"
             statement = f"CREATE TABLE {new_table_name} AS ({statement})"
         logger.debug(
-            f"Statement: {statement[:100]}{'...' if len(statement) > 100 else ''}"
+            f"Statement: {statement[:100]}{('...' if len(statement) > 100 else '')}"
         )
-
         # --- Dry Run Check ---
         if args.dry_run:
             simulate_exec(args, statement, i + 1, len(statements))
@@ -1205,7 +1093,6 @@ def handle_exec(args, client: QuestDBClient):
                 sys.stdout.write(output_separator)
             first_output_written = True
             continue  # Skip actual execution
-
         try:
             response_json = client.exec(
                 query=statement,
@@ -1217,7 +1104,6 @@ def handle_exec(args, client: QuestDBClient):
                 quote_large_num=args.quoteLargeNum,
                 statement_timeout=args.statement_timeout,
             )
-
             # Check for errors within the JSON response (QuestDB API errors)
             if isinstance(response_json, dict) and "error" in response_json:
                 logger.error(
@@ -1237,11 +1123,9 @@ def handle_exec(args, client: QuestDBClient):
                 else:
                     logger.warning("Continuing execution (stop-on-error disabled).")
                     continue  # Skip to next statement
-
             # Print separator if this is not the first successful output
             if first_output_written and output_separator:
                 sys.stdout.write(output_separator)
-
             # --- Handle Output Formatting ---
             output_written_this_statement = False
             if args.explain_only:
@@ -1265,12 +1149,11 @@ def handle_exec(args, client: QuestDBClient):
                     logger.debug(
                         f"Statement {i + 1}: --one specified, but response was not a dict or lacked 'dataset'."
                     )
-
             elif (
                 (args.markdown or args.psql)
                 and isinstance(response_json, dict)
-                and "columns" in response_json
-                and "dataset" in response_json
+                and ("columns" in response_json)
+                and ("dataset" in response_json)
             ):
                 try:
                     from tabulate import tabulate
@@ -1308,29 +1191,24 @@ def handle_exec(args, client: QuestDBClient):
                     )
                     json.dump(response_json, sys.stdout, indent=2)
                     sys.stdout.write("\n")
-                    output_written_this_statement = True
-
-            else:  # Default: JSON output
-                # Only print JSON if it's not just a simple DDL response (like {'ddl': 'OK'})
-                # unless it's the *only* thing in the response.
-                if not (
-                    len(response_json) == 1
-                    and "ddl" in response_json
-                    and response_json["ddl"] == "OK"
-                ):
-                    json.dump(response_json, sys.stdout, indent=2)
-                    sys.stdout.write("\n")
-                    output_written_this_statement = True
-                else:
-                    logger.debug(
-                        f"Statement {i + 1}: Suppressing simple DDL OK response in default JSON output."
-                    )
-
+                    output_written_this_statement = True  # Default: JSON output
+            # Only print JSON if it's not just a simple DDL response (like {'ddl': 'OK'})
+            # unless it's the *only* thing in the response.
+            elif not (
+                len(response_json) == 1
+                and "ddl" in response_json
+                and (response_json["ddl"] == "OK")
+            ):
+                json.dump(response_json, sys.stdout, indent=2)
+                sys.stdout.write("\n")
+                output_written_this_statement = True
+            else:
+                logger.debug(
+                    f"Statement {i + 1}: Suppressing simple DDL OK response in default JSON output."
+                )
             if output_written_this_statement:
                 first_output_written = True  # Mark that we have produced output
-
             logger.info(f"Statement {i + 1} executed successfully.")
-
         except QuestDBAPIError as e:
             # Error logged by client, just record failure and decide stop/continue
             logger.warning(f"Statement {i + 1} failed with API error: {e}")
@@ -1340,7 +1218,6 @@ def handle_exec(args, client: QuestDBClient):
                 sys.stderr.write(f"Query: {e.response_data['query']}\n")
             elif "query" in statement:  # Fallback to original statement
                 sys.stderr.write(f"Query: {statement}\n")
-
             any_statement_failed = True
             if args.stop_on_error:
                 logger.warning(
@@ -1365,7 +1242,6 @@ def handle_exec(args, client: QuestDBClient):
                 f"\nOperation cancelled by user during statement {i + 1} execution."
             )
             sys.exit(130)
-
     # 4. Final Exit Status
     if any_statement_failed:
         logger.warning("One or more statements failed during execution.")
@@ -1377,29 +1253,25 @@ def handle_exec(args, client: QuestDBClient):
 
 def handle_exp(args, client: QuestDBClient):
     """Handles the /exp command using the client."""
-
     logger.info(f"Exporting data from {client.base_url}...")
     logger.info(f"Query: {args.query}")
-
     # --- Dry Run Check ---
     if args.dry_run:
         simulate_exp(args)
         sys.exit(0)  # Exit after simulation
-
     stream_enabled = bool(args.output_file)
     output_file_handle = None
     output_target_desc = "stdout"
     response = None  # Initialize response variable
-
     try:
         # Get the response object from the client
+        # Tell client to stream if writing to file
         response = client.exp(
             query=args.query,
             limit=args.limit,
             nm=args.nm,
-            stream_response=stream_enabled,  # Tell client to stream if writing to file
+            stream_response=stream_enabled,
         )
-
         # --- Output Response to stdout or file ---
         if args.output_file:
             output_file_path = Path(args.output_file)
@@ -1426,10 +1298,9 @@ def handle_exp(args, client: QuestDBClient):
             output_text = response.text
             sys.stdout.write(output_text)
             # Ensure the output ends with a newline if it doesn't already
-            if output_text and not output_text.endswith("\n"):
+            if output_text and (not output_text.endswith("\n")):
                 sys.stdout.write("\n")
             logger.info("Successfully exported data to stdout.")
-
     except QuestDBError as e:
         logger.error(f"Export failed: {e}")
         sys.exit(1)
@@ -1446,50 +1317,116 @@ def handle_exp(args, client: QuestDBClient):
 
 
 def handle_chk(args, client: QuestDBClient):
-    """Handles the /chk command using the client."""
-    table_name = args.table_name
-    logger.info(f"Checking existence of table '{table_name}'...")
-
-    # --- Dry Run Check ---
-    if args.dry_run:
-        simulate_chk(args)
+    """Handles the /chk command using the client for multiple tables."""
+    table_names_to_check = []
+    source_description = ""
+    # 1. Determine the source of table names (validation in get_args)
+    if args.table_names:
+        table_names_to_check = args.table_names
+        source_description = "command line arguments"
+    elif args.file:
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                table_names_to_check = [
+                    line.strip() for line in f if line.strip()
+                ]  # Read non-empty lines
+            source_description = f"file '{args.file}'"
+        except IOError as e:
+            logger.warning(f"Error reading table names file '{args.file}': {e}")
+            sys.exit(1)
+    elif not sys.stdin.isatty():
+        logger.info("Reading table names from standard input (one per line)...")
+        try:
+            table_names_to_check = [
+                line.strip() for line in sys.stdin if line.strip()
+            ]  # Read non-empty lines
+            source_description = "standard input"
+        except Exception as e:
+            logger.warning(f"Error reading table names from stdin: {e}")
+            sys.exit(1)
+    else:
+        # This case should be caught by validation in get_args
+        logger.error("Internal error: No table names source identified.")
+        sys.exit(2)
+    if not table_names_to_check:
+        logger.warning(f"No valid table names found in {source_description}.")
         sys.exit(0)
-
-    try:
-        exists = client.table_exists(table_name)
-        status_message = "Exists" if exists else "Does not exist"
-        logger.info(f"Result: Table '{table_name}' {status_message.lower()}.")
-        # Output consistent JSON to stdout
-        print(json.dumps({"tableName": table_name, "status": status_message}, indent=2))
-        sys.exit(0 if exists else 3)  # Exit 0 if exists, Exit 3 if not exists
-
-    except QuestDBAPIError as e:
-        logger.error(f"API Error checking table '{table_name}': {e}")
-        # Output error JSON to stdout
-        print(
-            json.dumps(
-                {"tableName": table_name, "status": "Error", "detail": str(e)}, indent=2
-            )
-        )
-        sys.exit(1)
-    except QuestDBError as e:
-        logger.error(f"Error checking table '{table_name}': {e}")
-        print(
-            json.dumps(
-                {"tableName": table_name, "status": "Error", "detail": str(e)}, indent=2
-            )
-        )
-        sys.exit(1)
-    except KeyboardInterrupt:
-        logger.info("\nOperation cancelled by user.")
-        sys.exit(130)
+    logger.info(
+        f"Checking existence for {len(table_names_to_check)} table(s) from {source_description}."
+    )
+    any_check_failed = False
+    num_tables = len(table_names_to_check)
+    json_separator = "\n"
+    first_output_written = False
+    for i, table_name in enumerate(table_names_to_check):
+        logger.info(f"--- Checking table {i + 1}/{num_tables}: '{table_name}' ---")
+        # --- Dry Run Check ---
+        if args.dry_run:
+            simulate_chk(args, table_name, i + 1, num_tables)
+            if first_output_written:  # Print separator if not first dry-run output
+                sys.stdout.write(json_separator)
+            first_output_written = True
+            continue  # Skip actual execution
+        try:
+            exists = client.table_exists(table_name)
+            status_message = "Exists" if exists else "Does not exist"
+            logger.info(f"Result: Table '{table_name}' {status_message.lower()}.")
+            # Output consistent JSON to stdout
+            result = {"tableName": table_name, "status": status_message}
+            if first_output_written:
+                sys.stdout.write(json_separator)
+            print(json.dumps(result, indent=2))
+            first_output_written = True
+            # Note: We don't exit based on existence here, only on errors.
+        except QuestDBAPIError as e:
+            logger.error(f"API Error checking table '{table_name}': {e}")
+            result = {
+                "tableName": table_name,
+                "status": "Error",
+                "detail": str(e),
+                "api_details": e.response_data,
+            }
+            if first_output_written:
+                sys.stdout.write(json_separator)
+            print(json.dumps(result, indent=2))
+            first_output_written = True
+            any_check_failed = True
+            if args.stop_on_error:
+                logger.warning(
+                    "Stopping execution due to error (stop-on-error enabled)."
+                )
+                sys.exit(1)
+            # else: continue to next table is implicit loop continuation
+        except QuestDBError as e:
+            logger.error(f"Error checking table '{table_name}': {e}")
+            result = {"tableName": table_name, "status": "Error", "detail": str(e)}
+            if first_output_written:
+                sys.stdout.write(json_separator)
+            print(json.dumps(result, indent=2))
+            first_output_written = True
+            any_check_failed = True
+            if args.stop_on_error:
+                logger.warning(
+                    "Stopping execution due to error (stop-on-error enabled)."
+                )
+                sys.exit(1)
+            # else: continue to next table is implicit loop continuation
+        except KeyboardInterrupt:
+            logger.info("\nOperation cancelled by user.")
+            sys.exit(130)
+    # --- Final Exit Status ---
+    if any_check_failed:
+        logger.warning("One or more table checks failed.")
+        sys.exit(2)  # Indicate partial failure if stop-on-error was false
+    else:
+        logger.info("All requested tables checked successfully.")
+        sys.exit(0)  # Exit 0 on success, regardless of existence results
 
 
 def handle_drop(args, client: QuestDBClient):
     """Handles the drop/drop-table command using the client's exec method."""
     table_names_to_drop = []
     source_description = ""
-
     # 1. Determine the source of table names and load them
     # (Validation moved to get_args)
     if args.table_names:
@@ -1521,28 +1458,22 @@ def handle_drop(args, client: QuestDBClient):
         )
         # Use exit code 2 for usage errors
         sys.exit(2)
-
     if not table_names_to_drop:
         logger.warning(f"No valid table names found in {source_description}.")
         sys.exit(0)
-
     logger.info(
         f"Found {len(table_names_to_drop)} table(s) to drop from {source_description}."
     )
-
     # 2. Process the tables
     any_real_table_failed = False  # Track actual failures, not "not exists"
     num_tables = len(table_names_to_drop)
     json_separator = "\n"
     first_output_written = False
-
     for i, table_name in enumerate(table_names_to_drop):
         logger.info(
             f"--- Processing DROP for table {i + 1}/{num_tables}: '{table_name}' ---"
         )
-
         table_skipped_not_exist = False  # Flag for this specific table
-
         # --- Dry Run Check ---
         if args.dry_run:
             simulate_drop(args, table_name, i + 1, num_tables)
@@ -1550,18 +1481,14 @@ def handle_drop(args, client: QuestDBClient):
                 sys.stdout.write(json_separator)
             first_output_written = True
             continue  # Skip actual execution
-
         # Quote the table name for safety - QuestDB uses single quotes for table names in DROP
         safe_table_name = table_name.replace("'", "''")  # Basic escaping
         query = f"DROP TABLE '{safe_table_name}';"
-
         try:
             logger.info(f"Executing: {query}")
             response_json = client.exec(
-                query=query,
-                statement_timeout=args.statement_timeout,
+                query=query, statement_timeout=args.statement_timeout
             )
-
             # Check for errors within the JSON response
             if isinstance(response_json, dict) and "error" in response_json:
                 error_msg = response_json["error"]
@@ -1584,7 +1511,6 @@ def handle_drop(args, client: QuestDBClient):
                     first_output_written = True
                     # Continue to the next table without marking as failure
                     continue
-
                 else:
                     # Handle other errors as real failures
                     logger.error(f"Error dropping table '{table_name}': {error_msg}")
@@ -1601,18 +1527,16 @@ def handle_drop(args, client: QuestDBClient):
                     else:
                         logger.warning("Continuing execution (stop-on-error disabled).")
                         continue  # Skip to next table
-
             # --- Success Case ---
             # Print separator if this is not the first successful output
             if first_output_written:
                 sys.stdout.write(json_separator)
-
             # Print confirmation JSON
+            # Include DDL response if present
             result = {
                 "status": "OK",
                 "table_dropped": table_name,
                 "message": f"Table '{table_name}' dropped successfully.",
-                # Include DDL response if present
                 "ddl_response": response_json.get("ddl")
                 if isinstance(response_json, dict)
                 else None,
@@ -1620,7 +1544,6 @@ def handle_drop(args, client: QuestDBClient):
             print(json.dumps(result, indent=2))
             first_output_written = True
             logger.info(f"Table '{table_name}' dropped successfully.")
-
         except QuestDBAPIError as e:
             # Check if the API error itself indicates "table does not exist"
             error_msg = str(e)
@@ -1674,7 +1597,6 @@ def handle_drop(args, client: QuestDBClient):
                 f"\nOperation cancelled by user while dropping table '{table_name}'."
             )
             sys.exit(130)
-
     # --- Final Exit Status ---
     if any_real_table_failed:
         logger.warning(
@@ -1700,11 +1622,9 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
     temp_table_name = temp_table_name[:250]  # Ensure within length limits
     # Quote the temp table name for safety in RENAME/DROP later
     safe_temp_table_name_quoted = temp_table_name.replace("'", "''")
-
     logger.info(
         f"Starting create-or-replace operation for table '{target_table}' using temp table '{temp_table_name}'..."
     )
-
     # --- 1. Get SQL Query Content ---
     sql_content = ""
     source_description = ""
@@ -1753,7 +1673,6 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
     else:
         logger.warning("No SQL query provided via argument, file, module, or stdin.")
         sys.exit(1)
-
     # Extract the *single* defining query
     try:
         statements = extract_statements_from_sql(sql_content)
@@ -1764,7 +1683,6 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                 f"Multiple SQL statements found in {source_description}. Only the first statement will be used for CREATE TABLE AS."
             )
         defining_query = statements[0]
-
         # --- VALIDATION (Optional but recommended): Check if it looks like SELECT ---
         # This is informational now, as we trust the user's assertion about syntax
         if not defining_query.strip().lower().startswith("select"):
@@ -1773,20 +1691,17 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
             )
             logger.warning(f"Query: {defining_query}")
         # --- End Validation ---
-
         logger.info(f"Using query from {source_description} for table creation.")
         logger.debug(
-            f"Query: {defining_query[:100]}{'...' if len(defining_query) > 100 else ''}"
+            f"Query: {defining_query[:100]}{('...' if len(defining_query) > 100 else '')}"
         )
     except Exception as e:
         logger.error(f"Failed to parse SQL from {source_description}: {e}")
         sys.exit(1)
-
     # --- Dry Run Check ---
     if args.dry_run:
         simulate_create_or_replace(args, defining_query)  # Use updated simulation
         sys.exit(0)
-
     # --- Actual Execution ---
     original_exists = False
     backup_name = None
@@ -1794,11 +1709,10 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
     backup_created = False
     original_dropped_no_backup = False
     temp_table_created = False
-
     # Quote the target table name for use in RENAME/DROP
     safe_target_table_quoted = target_table.replace("'", "''")
-
     # --- Cleanup function in case of errors ---
+
     def cleanup_temp_table():
         if temp_table_created:
             logger.warning(
@@ -1828,7 +1742,6 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
         logger.info(f"Creating temporary table '{temp_table_name}' from query...")
         # don't quote, must use literal
         safe_timestamp_col = args.timestamp if args.timestamp else None
-
         create_parts = [
             f"CREATE TABLE {temp_table_name} AS ({defining_query})"
         ]  # Use unquoted temp table name
@@ -1836,10 +1749,8 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
             create_parts.append(f"TIMESTAMP({safe_timestamp_col})")
         if args.partitionBy:
             create_parts.append(f"PARTITION BY {args.partitionBy}")
-
         create_query = " ".join(create_parts) + ";"
         logger.debug(f"Executing CREATE TEMP statement: {create_query}")
-
         try:
             response = client.exec(
                 query=create_query, statement_timeout=args.statement_timeout
@@ -1860,11 +1771,9 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
             )
             # No cleanup needed here as temp table wasn't created
             sys.exit(1)
-
         # --- 3. Check if target table exists ---
         logger.info(f"Checking if target table '{target_table}' exists...")
         original_exists = client.table_exists(target_table)
-
         # --- 4. Handle Existing Table (Backup/Drop) ---
         rename_original_failed = False
         if original_exists:
@@ -1903,11 +1812,9 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                     gen_name = f"qdb_cli_backup_{target_table}_{uuid.uuid4()}"
                     backup_name = gen_name[:250].replace("-", "_")
                     logger.info(f"Generated backup name: '{backup_name}'")
-
                 safe_backup_name_quoted = backup_name.replace(
                     "'", "''"
                 )  # Quote for potential rollback
-
                 # Check if backup name already exists
                 logger.info(f"Checking if backup table '{backup_name}' exists...")
                 if client.table_exists(backup_name):
@@ -1919,7 +1826,6 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                 logger.info(
                     f"Backup table '{backup_name}' does not exist. Proceeding with rename."
                 )
-
                 # Rename original to backup
                 logger.info(
                     f"Renaming original table '{target_table}' to backup table '{backup_name}'..."
@@ -1947,7 +1853,6 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                     )
                     rename_original_failed = True  # Mark failure for rollback check
                     # Don't exit yet, attempt final rename, but report this error at the end
-
         # --- 5. Rename Temporary Table to Target Table ---
         logger.info(
             f"Renaming temporary table '{temp_table_name}' to target table '{target_table}'..."
@@ -1966,7 +1871,6 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                     f"Failed to rename temporary table to target: {error_detail}",
                     response_data=response,
                 )
-
             # If the original rename failed, report it now even if final rename succeeded
             if rename_original_failed:
                 logger.error(
@@ -1974,21 +1878,18 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                 )
                 cleanup_temp_table()  # Temp table *should* be gone now, but try just in case
                 sys.exit(1)
-
             logger.info(
                 f"Successfully renamed temporary table '{temp_table_name}' to '{target_table}'."
             )
             temp_table_created = False  # Mark temp table as successfully renamed/gone
-
             # --- 6. Success Reporting ---
             success_message = f"Successfully created/replaced table '{target_table}'."
             if backup_created:
                 success_message += f" Original table backed up as '{backup_name}'."
             elif original_dropped_no_backup:
-                success_message += f" Original table was dropped (no backup)."
+                success_message += " Original table was dropped (no backup)."
             elif not original_exists:
                 success_message += " (Original table did not exist)."
-
             print(
                 json.dumps(
                     {
@@ -2002,12 +1903,10 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                 )
             )
             sys.exit(0)
-
         except QuestDBError as final_rename_err:
             logger.error(
                 f"Error renaming temporary table '{temp_table_name}' to '{target_table}': {final_rename_err}"
             )
-
             # --- Rollback Attempt ---
             if backup_created:
                 logger.warning("Attempting to roll back by renaming backup table...")
@@ -2042,7 +1941,6 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                     logger.error(
                         f"!!! The new data might be in the temporary table: '{temp_table_name}'."
                     )
-
             elif original_dropped_no_backup:
                 logger.error(
                     "!!! Final rename failed after original table was dropped (no backup)."
@@ -2052,7 +1950,7 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                 )
             elif rename_original_failed:
                 logger.error(
-                    f"!!! Final rename failed AND the previous attempt to rename the original table also failed."
+                    "!!! Final rename failed AND the previous attempt to rename the original table also failed."
                 )
                 logger.error(
                     f"!!! State is uncertain. Original table '{target_table}' might still exist."
@@ -2065,16 +1963,14 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                 logger.error(
                     f"!!! The new data might be in the temporary table: '{temp_table_name}'."
                 )
-
             cleanup_temp_table()  # Attempt to remove the temp table regardless of rollback outcome
             sys.exit(1)  # Exit with error after handling final rename failure
-
     except QuestDBError as e:
         logger.error(f"An unexpected QuestDB error occurred during the operation: {e}")
         cleanup_temp_table()  # Attempt cleanup
         # Check if state is inconsistent due to error before final rename
-        if (
-            backup_created and not temp_table_created
+        if backup_created and (
+            not temp_table_created
         ):  # Error happened after backup rename but before/during final rename
             logger.error(
                 f"!!! An error occurred after the original table was renamed to '{backup_name}'. Manual check required. Temporary table '{temp_table_name}' may or may not exist."
@@ -2115,69 +2011,111 @@ def explain_output_to_text(data: Dict[str, Any]) -> str:
 
 
 # --- NEW: handle_schema ---
+
+
 def handle_schema(args, client: QuestDBClient):
-    """Handles the schema command, fetching CREATE TABLE statements."""
+    """Handles the schema command, fetching CREATE TABLE statements for multiple tables."""
+    table_names_to_process = []
+    source_description = ""
+    # 1. Determine the source of table names (validation in get_args)
+    if args.table_names:
+        table_names_to_process = args.table_names
+        source_description = "command line arguments"
+    elif args.file:
+        try:
+            with open(args.file, "r", encoding="utf-8") as f:
+                table_names_to_process = [
+                    line.strip() for line in f if line.strip()
+                ]  # Read non-empty lines
+            source_description = f"file '{args.file}'"
+        except IOError as e:
+            logger.warning(f"Error reading table names file '{args.file}': {e}")
+            sys.exit(1)
+    elif not sys.stdin.isatty():
+        logger.info("Reading table names from standard input (one per line)...")
+        try:
+            table_names_to_process = [
+                line.strip() for line in sys.stdin if line.strip()
+            ]  # Read non-empty lines
+            source_description = "standard input"
+        except Exception as e:
+            logger.warning(f"Error reading table names from stdin: {e}")
+            sys.exit(1)
+    else:
+        # This case should be caught by validation in get_args
+        logger.error("Internal error: No table names source identified.")
+        sys.exit(2)
+    if not table_names_to_process:
+        logger.warning(f"No valid table names found in {source_description}.")
+        sys.exit(0)
+    logger.info(
+        f"Fetching schema for {len(table_names_to_process)} table(s) from {source_description}."
+    )
+    # --- Process Tables ---
     any_table_failed = False
     output_separator = "\n\n"  # Separate multiple CREATE TABLE statements
-
-    if not args.dry_run:
-        log_level = logging.WARNING
-        logger.setLevel(log_level)
-
-    # Iterate through provided table names
+    num_tables = len(table_names_to_process)
     first_output_written = False
-    for i, table_name in enumerate(args.table_names):
+    # Suppress info/debug logs from client during schema fetch unless requested globally
+    original_client_log_level = logging.getLogger("questdb_rest").getEffectiveLevel()
+    if not args.debug and (not args.info):
+        logging.getLogger("questdb_rest").setLevel(logging.WARNING)
+    for i, table_name in enumerate(table_names_to_process):
         logger.info(
-            f"Fetching schema for table {i + 1}/{len(args.table_names)}: '{table_name}'..."
+            f"--- Fetching schema for table {i + 1}/{num_tables}: '{table_name}' ---"
         )
-
         # --- Dry Run Check ---
         if args.dry_run:
-            simulate_schema(args, table_name)
+            simulate_schema(args, table_name, i + 1, num_tables)
             if first_output_written:
                 sys.stdout.write(output_separator)
             first_output_written = True
             continue  # Skip actual execution
-
         # --- Actual Execution ---
-        # Quote the table name for safety, especially if it contains special characters
-        # QuestDB syntax typically uses double quotes for identifiers.
-        # Handle potential existing quotes in table_name? Assume simple names for now.
-        safe_table_name = table_name.replace('"', '""')  # Basic escaping if needed
-        statement = f'SHOW CREATE TABLE "{safe_table_name}";'
-
+        # Use double quotes for SHOW CREATE TABLE identifier
+        safe_table_name_double_quoted = table_name.replace('"', '""')
+        statement = f'SHOW CREATE TABLE "{safe_table_name_double_quoted}";'
         try:
+            # Intentionally don't pass most exec args, only statement_timeout
             response_json = client.exec(
-                query=statement,
-                # These exec options are generally not relevant for SHOW CREATE TABLE
-                limit=None,
-                count=None,
-                nm=None,
-                timings=None,
-                explain=None,
-                quote_large_num=None,
-                statement_timeout=args.statement_timeout,
+                query=statement, statement_timeout=args.statement_timeout
             )
-
             # Check for errors within the JSON response
             if isinstance(response_json, dict) and "error" in response_json:
-                logger.error(
-                    f"Error fetching schema for '{table_name}': {response_json['error']}"
-                )
-                sys.stderr.write(
-                    f"-- Error for table '{table_name}' --\nError: {response_json['error']}\n"
-                )
-                any_table_failed = True
-                if args.stop_on_error:
+                error_msg = response_json["error"]
+                # Check if the error is "table does not exist"
+                if "table does not exist" in error_msg.lower():
                     logger.warning(
-                        "Stopping execution due to error (stop-on-error enabled)."
+                        f"Table '{table_name}' does not exist, cannot fetch schema."
                     )
-                    sys.exit(1)
+                    sys.stderr.write(
+                        f"-- Info for table '{table_name}' --\nTable does not exist.\n"
+                    )
+                    # Optionally treat 'not exists' as a failure or just skip output
+                    # Let's treat it as a skippable non-failure for schema command
+                    continue  # Skip output for this table, but don't mark as failed
                 else:
-                    logger.warning("Continuing execution (stop-on-error disabled).")
-                    continue  # Skip to next table
-
-            # Extract the CREATE TABLE statement (equivalent to --one in exec)
+                    # Handle other errors as real failures
+                    logger.error(
+                        f"Error fetching schema for '{table_name}': {error_msg}"
+                    )
+                    sys.stderr.write(
+                        f"-- Error for table '{table_name}' --\nError: {error_msg}\n"
+                    )
+                    any_table_failed = True
+                    if args.stop_on_error:
+                        logger.warning(
+                            "Stopping execution due to error (stop-on-error enabled)."
+                        )
+                        # Restore original log level before exiting
+                        logging.getLogger("questdb_rest").setLevel(
+                            original_client_log_level
+                        )
+                        sys.exit(1)
+                    else:
+                        logger.warning("Continuing execution (stop-on-error disabled).")
+                        continue  # Skip to next table
+            # Extract the CREATE TABLE statement
             create_statement = None
             if isinstance(response_json, dict) and "dataset" in response_json:
                 if (
@@ -2186,66 +2124,78 @@ def handle_schema(args, client: QuestDBClient):
                 ):
                     create_statement = response_json["dataset"][0][0]
                 else:
+                    # This case might indicate an issue if the table was expected to exist
                     logger.warning(
-                        f"Received empty dataset for 'SHOW CREATE TABLE {table_name}'."
+                        f'''Received empty dataset for 'SHOW CREATE TABLE "{safe_table_name_double_quoted}"'. Table might be empty or query failed silently.'''
                     )
-                    # Maybe the table exists but the command returned unexpectedly?
                     sys.stderr.write(
                         f"-- Warning for table '{table_name}' --\nReceived empty result for SHOW CREATE TABLE.\n"
                     )
-                    any_table_failed = True  # Treat as failure
+                    # Treat as failure for schema command if we expected a result
+                    any_table_failed = True
                     if args.stop_on_error:
+                        logging.getLogger("questdb_rest").setLevel(
+                            original_client_log_level
+                        )
                         sys.exit(1)
                     else:
                         continue
-
             else:
                 logger.error(
-                    f"Unexpected response format for 'SHOW CREATE TABLE {table_name}': {response_json}"
+                    f'''Unexpected response format for 'SHOW CREATE TABLE "{safe_table_name_double_quoted}"': {response_json}'''
                 )
                 sys.stderr.write(
                     f"-- Error for table '{table_name}' --\nUnexpected response format from server.\n"
                 )
                 any_table_failed = True
                 if args.stop_on_error:
+                    logging.getLogger("questdb_rest").setLevel(
+                        original_client_log_level
+                    )
                     sys.exit(1)
                 else:
                     continue
-
             # Print separator if this is not the first successful output
             if first_output_written:
                 sys.stdout.write(output_separator)
-
             # Print the extracted CREATE TABLE statement
             if create_statement:
                 sys.stdout.write(create_statement)
-                # Ensure trailing newline (though SHOW CREATE TABLE usually includes one)
+                # Ensure trailing newline
                 if not create_statement.endswith("\n"):
                     sys.stdout.write("\n")
                 first_output_written = True
                 logger.info(f"Successfully fetched schema for '{table_name}'.")
-
         except QuestDBAPIError as e:
-            logger.warning(
-                f"Fetching schema for '{table_name}' failed with API error: {e}"
-            )
-            sys.stderr.write(f"-- Error for table '{table_name}' --\nError: {e}\n")
-            any_table_failed = True
-            if args.stop_on_error:
+            # Check if API error itself indicates "table does not exist"
+            error_msg = str(e)
+            if "table does not exist" in error_msg.lower():
                 logger.warning(
-                    "Stopping execution due to API error (stop-on-error enabled)."
+                    f"Table '{table_name}' does not exist (API Error), cannot fetch schema."
                 )
-                sys.exit(1)
+                sys.stderr.write(
+                    f"-- Info for table '{table_name}' --\nTable does not exist (API Error).\n"
+                )
+                continue  # Skip output, not a failure for this command
             else:
-                logger.warning("Continuing execution (stop-on-error disabled).")
+                logger.warning(
+                    f"Fetching schema for '{table_name}' failed with API error: {e}"
+                )
+                sys.stderr.write(f"-- Error for table '{table_name}' --\nError: {e}\n")
+                any_table_failed = True
+                if args.stop_on_error:
+                    logging.getLogger("questdb_rest").setLevel(
+                        original_client_log_level
+                    )
+                    sys.exit(1)
+                else:
+                    logger.warning("Continuing execution (stop-on-error disabled).")
         except QuestDBError as e:  # Catch other client errors (connection etc.)
             logger.warning(f"Fetching schema for '{table_name}' failed: {e}")
             sys.stderr.write(f"-- Error for table '{table_name}' --\nError: {e}\n")
             any_table_failed = True
             if args.stop_on_error:
-                logger.warning(
-                    "Stopping execution due to error (stop-on-error enabled)."
-                )
+                logging.getLogger("questdb_rest").setLevel(original_client_log_level)
                 sys.exit(1)
             else:
                 logger.warning("Continuing execution (stop-on-error disabled).")
@@ -2262,6 +2212,7 @@ def handle_schema(args, client: QuestDBClient):
             )
             any_table_failed = True
             if args.stop_on_error:
+                logging.getLogger("questdb_rest").setLevel(original_client_log_level)
                 sys.exit(1)
             else:
                 continue
@@ -2269,8 +2220,10 @@ def handle_schema(args, client: QuestDBClient):
             logger.info(
                 f"\nOperation cancelled by user while fetching schema for '{table_name}'."
             )
+            logging.getLogger("questdb_rest").setLevel(original_client_log_level)
             sys.exit(130)
-
+    # Restore original client log level
+    logging.getLogger("questdb_rest").setLevel(original_client_log_level)
     # --- Final Exit Status ---
     if any_table_failed:
         logger.warning("One or more table schemas could not be fetched.")
@@ -2284,35 +2237,29 @@ def handle_rename(args, client: QuestDBClient):
     """Handles the rename command using the client's exec method."""
     old_name = args.old_table_name
     new_name = args.new_table_name
-
     logger.info(f"Preparing to rename table '{old_name}' to '{new_name}'...")
-
     # --- Dry Run Check ---
     if args.dry_run:
         # Pass client to simulation in case it needs it in the future (though not currently)
         simulate_rename(args, client)  # simulate_rename handles sys.exit(0)
-
     # Quote the table names for safety - QuestDB uses single quotes for table names in RENAME
     safe_old_name = old_name.replace("'", "''")  # Basic escaping
     safe_new_name = new_name.replace("'", "''")  # Basic escaping
-
     backup_name = None
     backup_created = False
     new_table_originally_existed = False
-
     try:
         # 1. Check if the new table name already exists
         logger.info(f"Checking if target table name '{new_name}' already exists...")
         new_table_originally_existed = client.table_exists(new_name)
-
         if new_table_originally_existed:
             logger.warning(f"Target table name '{new_name}' already exists.")
             if args.no_backup_if_new_table_exists:
                 logger.warning(
                     "--no-backup-if-new-table-exists specified. Proceeding without backup. The final rename might fail."
                 )
-                # No backup action needed, proceed to final rename
             else:
+                # No backup action needed, proceed to final rename
                 # Generate backup name for the *existing* new_name table
                 backup_name = f"qdb_cli_backup_{new_name}_{uuid.uuid4()}".replace(
                     "-", "_"
@@ -2321,14 +2268,12 @@ def handle_rename(args, client: QuestDBClient):
                 logger.info(
                     f"Attempting to back up existing table '{new_name}' to '{backup_name}'..."
                 )
-
                 # Check if generated backup name clashes (highly unlikely)
                 if client.table_exists(backup_name):
                     logger.error(
                         f"Generated backup name '{backup_name}' already exists. Cannot proceed."
                     )
                     sys.exit(1)
-
                 # Execute backup rename
                 backup_query = (
                     f"RENAME TABLE '{safe_new_name}' TO '{safe_backup_name}';"
@@ -2358,16 +2303,13 @@ def handle_rename(args, client: QuestDBClient):
             logger.info(
                 f"Target table name '{new_name}' does not exist. No backup needed."
             )
-
         # 2. Execute the final rename operation
         logger.info(f"Renaming table '{old_name}' to '{new_name}'...")
         final_rename_query = f"RENAME TABLE '{safe_old_name}' TO '{safe_new_name}';"
+        # Default exec options are fine
         response_json = client.exec(
-            query=final_rename_query,
-            statement_timeout=args.statement_timeout,
-            # Default exec options are fine
+            query=final_rename_query, statement_timeout=args.statement_timeout
         )
-
         # Check for errors within the JSON response of the final rename
         if isinstance(response_json, dict) and "error" in response_json:
             logger.error(f"Error renaming table: {response_json['error']}")
@@ -2398,7 +2340,6 @@ def handle_rename(args, client: QuestDBClient):
                         f"!!! ROLLBACK FAILED: Error during rollback rename: {rb_err}"
                     )
             sys.exit(1)  # Exit after error and potential rollback attempt
-
         # Success Case
         success_message = f"Table '{old_name}' successfully renamed to '{new_name}'."
         if backup_created:
@@ -2409,7 +2350,6 @@ def handle_rename(args, client: QuestDBClient):
             success_message += (
                 f" Existing table at '{new_name}' was overwritten (no backup)."
             )
-
         logger.info(success_message)
         print(
             json.dumps(
@@ -2424,7 +2364,6 @@ def handle_rename(args, client: QuestDBClient):
             )
         )
         sys.exit(0)
-
     except QuestDBAPIError as e:
         # Catch errors during existence checks or backup rename not caught above
         logger.error(f"API Error during rename process: {e}")
@@ -2474,35 +2413,25 @@ def detect_scheme_in_host(host_str):
     Returns a tuple of (scheme, actual_host) if scheme is detected, or (None, host_str) if not.
     """
     if not host_str:
-        return None, host_str
-
+        return (None, host_str)
     if host_str.startswith("http://"):
-        return "http", host_str[7:]  # Remove "http://" prefix
+        return ("http", host_str[7:])  # Remove "http://" prefix
     elif host_str.startswith("https://"):
-        return "https", host_str[8:]  # Remove "https://" prefix
-
-    return None, host_str  # No scheme detected in host string
+        return ("https", host_str[8:])  # Remove "https://" prefix
+    return (None, host_str)  # No scheme detected in host string
 
 
 def _add_parser_global(parser: argparse.ArgumentParser):
     """Adds global arguments to the main parser."""
+    # "-V",
     parser.add_argument(
-        # "-V",
-        "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
-    )
+        "--version", action="version", version=f"%(prog)s {__version__}"
+    )  # Default handled by client init (checks config file first)
     parser.add_argument(
-        "-H",
-        "--host",
-        default=None,  # Default handled by client init (checks config file first)
-        help=f"QuestDB server host.",
-    )
+        "-H", "--host", default=None, help="QuestDB server host."
+    )  # Default handled by client init
     parser.add_argument(
-        "--port",
-        type=int,
-        default=None,  # Default handled by client init
-        help=f"QuestDB REST API port.",
+        "--port", type=int, default=None, help="QuestDB REST API port."
     )
     parser.add_argument(
         "-u", "--user", default=None, help="Username for basic authentication."
@@ -2512,28 +2441,27 @@ def _add_parser_global(parser: argparse.ArgumentParser):
         "--password",
         default=None,
         help="Password for basic authentication. If -u is given but -p is not, will prompt securely unless password is in config.",
-    )
+    )  # Default handled by client init
     parser.add_argument(
-        "--timeout",
-        type=int,
-        default=None,  # Default handled by client init
-        help="Request timeout in seconds.",
-    )
+        "--timeout", type=int, default=None, help="Request timeout in seconds."
+    )  # Default handled by client init
     parser.add_argument(
         "--scheme",
-        default=None,  # Default handled by client init
+        default=None,
         choices=["http", "https"],
         help="Connection scheme (http or https).",
     )
-    log_level_group = parser.add_mutually_exclusive_group()
+    log_level_group = (
+        parser.add_mutually_exclusive_group()
+    )  # Changed from -v to -i for INFO
     log_level_group.add_argument(
-        "-i",  # Changed from -v to -i for INFO
+        "-i",
         "--info",
         action="store_true",
         help="Use info level logging (default is WARNING).",
-    )
+    )  # Global Debug flag - MUST NOT clash with subcommand flags
     log_level_group.add_argument(
-        "-D",  # Global Debug flag - MUST NOT clash with subcommand flags
+        "-D",
         "--debug",
         action="store_true",
         help="Enable debug level logging to stderr.",
@@ -2551,10 +2479,11 @@ def _add_parser_global(parser: argparse.ArgumentParser):
     )
     # Shared stop-on-error argument for commands that process multiple items
     # Note: create-or-replace implicitly stops on error due to its nature
+    # Default to stopping on error
     parser.add_argument(
         "--stop-on-error",
         action=argparse.BooleanOptionalAction,
-        default=True,  # Default to stopping on error
+        default=True,
         help="Stop execution immediately if any item (file/statement/table) fails (where applicable).",
     )
 
@@ -2596,9 +2525,9 @@ def _add_parser_imp(subparsers: argparse._SubParsersAction):
         help="Prefix string for 'add_prefix' name function.",
         default="",
     )  # Default to empty string
-
+    # Reuse -d from imp for consistency, but different meaning
     group_imp_table_name.add_argument(
-        "-d",  # Reuse -d from imp for consistency, but different meaning
+        "-d",
         "--dash-to-underscore",
         action="store_true",
         help="If table name is derived from filename (i.e., --name not set), convert dashes (-) to underscores (_). Compatible with --name-func.",
@@ -2609,16 +2538,15 @@ def _add_parser_imp(subparsers: argparse._SubParsersAction):
         action="store_true",
         help="Shortcut for --name-func=stem and --dash-to-underscore.",
     )
-
     schema_group = parser_imp.add_mutually_exclusive_group()
     schema_group.add_argument(
         "--schema-file", help="Path to JSON schema file. Applied to ALL files."
     )
     schema_group.add_argument(
         "-s", "--schema", help="JSON schema string. Applied to ALL files. Use quotes."
-    )
+    )  # Keep -P for partitionBy
     parser_imp.add_argument(
-        "-P",  # Keep -P for partitionBy
+        "-P",
         "--partitionBy",
         choices=["NONE", "YEAR", "MONTH", "DAY", "HOUR", "WEEK"],
         help="Partitioning strategy (if table created).",
@@ -2639,11 +2567,8 @@ def _add_parser_imp(subparsers: argparse._SubParsersAction):
         default="skipCol",
         help="Behavior on data errors during import.",
     )
-    parser_imp.add_argument(
-        # Reuse -d from imp for delimiter
-        "--delimiter",
-        help="Specify CSV delimiter character.",
-    )
+    # Reuse -d from imp for delimiter
+    parser_imp.add_argument("--delimiter", help="Specify CSV delimiter character.")
     parser_imp.add_argument(
         "-F",
         "--forceHeader",
@@ -2661,15 +2586,15 @@ def _add_parser_imp(subparsers: argparse._SubParsersAction):
         choices=["tabular", "json"],
         default="tabular",
         help="Format for the response message to stdout.",
-    )
+    )  # Keep -O for o3MaxLag
     parser_imp.add_argument(
-        "-O",  # Keep -O for o3MaxLag
+        "-O",
         "--o3MaxLag",
         type=int,
         help="Set O3 max lag (microseconds, if table created).",
-    )
+    )  # Keep -M for maxUncommittedRows
     parser_imp.add_argument(
-        "-M",  # Keep -M for maxUncommittedRows
+        "-M",
         "--maxUncommittedRows",
         type=int,
         help="Set max uncommitted rows (if table created).",
@@ -2708,8 +2633,9 @@ def _add_parser_exec(subparsers: argparse._SubParsersAction):
         "-f", "--file", help="Path to file containing SQL statements."
     )
     # New option: get query from python module (e.g. a_module.b_module:my_sql_statement)
+    # Keep -G
     query_input_group.add_argument(
-        "-G",  # Keep -G
+        "-G",
         "--get-query-from-python-module",
         help="Get query from a Python module in the format 'module_path:variable_name'.",
     )
@@ -2717,9 +2643,9 @@ def _add_parser_exec(subparsers: argparse._SubParsersAction):
         "-l",
         "--limit",
         help='Limit results (e.g., "10", "10,20"). Applies per statement.',
-    )
+    )  # Keep -C for count
     parser_exec.add_argument(
-        "-C",  # Keep -C for count
+        "-C",
         "--count",
         action=argparse.BooleanOptionalAction,
         help="Include row count in response.",
@@ -2729,21 +2655,21 @@ def _add_parser_exec(subparsers: argparse._SubParsersAction):
         dest="nm",
         action=argparse.BooleanOptionalAction,
         help="Skip metadata in response.",
-    )
+    )  # Keep -T for timings
     parser_exec.add_argument(
-        "-T",  # Keep -T for timings
+        "-T",
         "--timings",
         action=argparse.BooleanOptionalAction,
         help="Include execution timings.",
-    )
+    )  # Keep -E for explain
     parser_exec.add_argument(
-        "-E",  # Keep -E for explain
+        "-E",
         "--explain",
         action=argparse.BooleanOptionalAction,
         help="Include execution plan details.",
-    )
+    )  # Keep -Q for quoteLargeNum
     parser_exec.add_argument(
-        "-Q",  # Keep -Q for quoteLargeNum
+        "-Q",
         "--quoteLargeNum",
         action=argparse.BooleanOptionalAction,
         help="Return LONG numbers as quoted strings.",
@@ -2770,21 +2696,21 @@ def _add_parser_exec(subparsers: argparse._SubParsersAction):
     )
     # Inherits global --stop-on-error
     # Output formatting options
-    exec_format_group = parser_exec.add_mutually_exclusive_group()
+    exec_format_group = parser_exec.add_mutually_exclusive_group()  # Keep -1 for --one
     exec_format_group.add_argument(
-        "-1",  # Keep -1 for --one
+        "-1",
         "--one",
         action="store_true",
         help="Output only the value of the first column of the first row.",
-    )
+    )  # Keep -m for markdown
     exec_format_group.add_argument(
-        "-m",  # Keep -m for markdown
+        "-m",
         "--markdown",
         action="store_true",
         help="Display query result(s) in Markdown table format using tabulate.",
     )
+    # Keep -P (uppercase) for psql format, distinct from global -p password
     exec_format_group.add_argument(
-        # Keep -P (uppercase) for psql format, distinct from global -p password
         "-P",
         "--psql",
         action="store_true",
@@ -2828,8 +2754,8 @@ def _add_parser_chk(subparsers: argparse._SubParsersAction):
     """Adds arguments for the 'chk' subcommand."""
     parser_chk = subparsers.add_parser(
         "chk",
-        help="Check if a table exists using /chk (returns JSON). Exit code 0 if exists, 3 if not.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        help="Check if one or more tables exist using /chk (returns JSON per table).\nReads table names from arguments, --file, or stdin.",
+        formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
     )
     parser_chk.add_argument(
@@ -2839,7 +2765,21 @@ def _add_parser_chk(subparsers: argparse._SubParsersAction):
         default=argparse.SUPPRESS,
         help="Show this help message and exit.",
     )
-    parser_chk.add_argument("table_name", help="Name of the table to check.")
+    # Allow zero or more positional args, or --file, or stdin
+    parser_chk.add_argument(
+        "table_names",
+        nargs="*",
+        metavar="TABLE_NAME",
+        help="Name(s) of the table(s) to check (provided as arguments).",
+    )
+    parser_chk.add_argument(
+        "-f",
+        "--file",
+        metavar="FILE_PATH",
+        help="Path to file containing table names (one per line). Cannot be used with positional arguments.",
+    )
+    # Implicit stdin reading if neither table_names nor --file is given
+    # Inherits global --stop-on-error
     parser_chk.set_defaults(func=handle_chk)
 
 
@@ -2847,8 +2787,8 @@ def _add_parser_schema(subparsers: argparse._SubParsersAction):
     """Adds arguments for the 'schema' subcommand."""
     parser_schema = subparsers.add_parser(
         "schema",
-        help="Fetch CREATE TABLE statement(s) for one or more tables.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        help="Fetch CREATE TABLE statement(s) for one or more tables.\nReads table names from arguments, --file, or stdin.",
+        formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
     )
     parser_schema.add_argument(
@@ -2858,12 +2798,23 @@ def _add_parser_schema(subparsers: argparse._SubParsersAction):
         default=argparse.SUPPRESS,
         help="Show this help message and exit.",
     )
+    # Allow zero or more positional args, or --file, or stdin
     parser_schema.add_argument(
-        "table_names", nargs="+", help="Name(s) of the table(s) to get schema for."
+        "table_names",
+        nargs="*",
+        metavar="TABLE_NAME",
+        help="Name(s) of the table(s) to get schema for (provided as arguments).",
+    )
+    parser_schema.add_argument(
+        "-f",
+        "--file",
+        metavar="FILE_PATH",
+        help="Path to file containing table names (one per line). Cannot be used with positional arguments.",
     )
     # Inherits global --stop-on-error
+    # Allow timeout per table schema fetch
     parser_schema.add_argument(
-        "--statement-timeout",  # Allow timeout per table schema fetch
+        "--statement-timeout",
         type=int,
         help="Query timeout in milliseconds (per table).",
     )
@@ -2891,9 +2842,9 @@ def _add_parser_rename(subparsers: argparse._SubParsersAction):
         "--no-backup-if-new-table-exists",
         action="store_true",
         help="If the new table name already exists, do not back it up first. Rename might fail.",
-    )
+    )  # Allow timeout for rename operation(s)
     parser_rename.add_argument(
-        "--statement-timeout",  # Allow timeout for rename operation(s)
+        "--statement-timeout",
         type=int,
         help="Query timeout in milliseconds (per RENAME statement).",
     )
@@ -2901,10 +2852,10 @@ def _add_parser_rename(subparsers: argparse._SubParsersAction):
 
 
 def _add_parser_cor(subparsers: argparse._SubParsersAction):
-    """Adds arguments for the 'create-or-replace-table-from-query' subcommand."""
+    """Adds arguments for the 'create-or-replace-table-from-query' subcommand."""  # Add alias
     parser_cor = subparsers.add_parser(
         "create-or-replace-table-from-query",
-        aliases=["cor"],  # Add alias
+        aliases=["cor"],
         help="Atomically replace a table with the result of a query, with optional backup.",
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
@@ -2936,12 +2887,14 @@ def _add_parser_cor(subparsers: argparse._SubParsersAction):
     backup_group = parser_cor.add_argument_group(
         "Backup Options (if target table exists)"
     )
-    backup_opts_exclusive = backup_group.add_mutually_exclusive_group()
+    backup_opts_exclusive = (
+        backup_group.add_mutually_exclusive_group()
+    )  # Ensure consistent dest
     backup_opts_exclusive.add_argument(
         "-B",
         "--backup-table-name",
         "--rename-original-table-to",
-        dest="backup_table_name",  # Ensure consistent dest
+        dest="backup_table_name",
         help="Specify a name for the backup table (if target exists). Default: generated name.",
     )
     backup_opts_exclusive.add_argument(
@@ -2959,9 +2912,9 @@ def _add_parser_cor(subparsers: argparse._SubParsersAction):
     )
     create_opts_group.add_argument(
         "-t", "--timestamp", help="Designated timestamp column name for the new table."
-    )
+    )  # Allow timeout for underlying DDL/query
     parser_cor.add_argument(
-        "--statement-timeout",  # Allow timeout for underlying DDL/query
+        "--statement-timeout",
         type=int,
         help="Query timeout in milliseconds for underlying operations.",
     )
@@ -2969,10 +2922,10 @@ def _add_parser_cor(subparsers: argparse._SubParsersAction):
 
 
 def _add_parser_drop(subparsers: argparse._SubParsersAction):
-    """Adds arguments for the 'drop' subcommand."""
+    """Adds arguments for the 'drop' subcommand."""  # Add alias
     parser_drop = subparsers.add_parser(
         "drop",
-        aliases=["drop-table"],  # Add alias
+        aliases=["drop-table"],
         help="Drop one or more tables using DROP TABLE.\nReads table names from arguments, --file, or stdin (one per line).",
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
@@ -2984,11 +2937,11 @@ def _add_parser_drop(subparsers: argparse._SubParsersAction):
         default=argparse.SUPPRESS,
         help="Show this help message and exit.",
     )
-
     # Remove the mutually exclusive group for inputs, validation will be done after parsing.
+    # Accepts zero or more table names as positional arguments.
     parser_drop.add_argument(
         "table_names",
-        nargs="*",  # Accepts zero or more table names as positional arguments.
+        nargs="*",
         help="Name(s) of the table(s) to drop (provided as arguments).",
         metavar="TABLE_NAME",
     )
@@ -2999,10 +2952,10 @@ def _add_parser_drop(subparsers: argparse._SubParsersAction):
         metavar="FILE_PATH",
     )
     # Implicit stdin reading if neither table_names nor --file is given
-
     # Inherits global --stop-on-error
+    # Allow timeout per table drop
     parser_drop.add_argument(
-        "--statement-timeout",  # Allow timeout per table drop
+        "--statement-timeout",
         type=int,
         help="Query timeout in milliseconds (per table).",
     )
@@ -3013,8 +2966,8 @@ def _add_parser_dedupe(subparsers: argparse._SubParsersAction):
     """Adds arguments for the 'dedupe' subcommand."""
     parser_dedupe = subparsers.add_parser(
         "dedupe",
-        help="Enable, disable, or check data deduplication settings for a WAL table.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        help="Enable, disable, or check deduplication for one or more WAL tables.\nReads table names from arguments, --file, or stdin.",
+        formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
     )
     parser_dedupe.add_argument(
@@ -3024,7 +2977,20 @@ def _add_parser_dedupe(subparsers: argparse._SubParsersAction):
         default=argparse.SUPPRESS,
         help="Show this help message and exit.",
     )
-    parser_dedupe.add_argument("table_name", help="Name of the target WAL table.")
+    # Allow zero or more positional args, or --file, or stdin
+    parser_dedupe.add_argument(
+        "table_names",
+        nargs="*",
+        metavar="TABLE_NAME",
+        help="Name(s) of the target WAL table(s) (provided as arguments).",
+    )
+    parser_dedupe.add_argument(
+        "-f",
+        "--file",
+        metavar="FILE_PATH",
+        help="Path to file containing table names (one per line). Cannot be used with positional arguments.",
+    )
+    # Action flags (apply to all tables)
     dedupe_action_group = parser_dedupe.add_mutually_exclusive_group()
     dedupe_action_group.add_argument(
         "--enable",
@@ -3039,17 +3005,21 @@ def _add_parser_dedupe(subparsers: argparse._SubParsersAction):
         action="store_true",
         help="Check current deduplication status and keys (default action).",
     )
+    # Upsert keys (apply to all tables if enabling)
+    # Accept multiple space-separated keys
     parser_dedupe.add_argument(
         "-k",
         "--upsert-keys",
-        nargs="+",  # Accept multiple space-separated keys
+        nargs="+",
         metavar="COLUMN",
-        help="List of column names to use as UPSERT KEYS when enabling. Must include the designated timestamp.",
+        help="List of column names for UPSERT KEYS when enabling. Must include the designated timestamp. Applies to all tables.",
     )
+    # Inherits global --stop-on-error
+    # Allow timeout for ALTER TABLE
     parser_dedupe.add_argument(
-        "--statement-timeout",  # Allow timeout for ALTER TABLE
+        "--statement-timeout",
         type=int,
-        help="Query timeout in milliseconds for the ALTER TABLE statement.",
+        help="Query timeout in milliseconds for the ALTER TABLE statement (per table).",
     )
     parser_dedupe.set_defaults(func=handle_dedupe)
 
@@ -3076,17 +3046,10 @@ def _add_parser_gen_config(subparsers: argparse._SubParsersAction):
 def get_args():
     """Parses command line arguments."""
     parser = argparse.ArgumentParser(
-        description="QuestDB REST API Command Line Interface.\nLogs to stderr, outputs data to stdout.\n\n"
-        "Uses QuestDB REST API via questdb_rest library.",
+        description="QuestDB REST API Command Line Interface.\nLogs to stderr, outputs data to stdout.\n\nUses QuestDB REST API via questdb_rest library.",
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
-        epilog="""This CLI can also be used as a Python library.
-
-Links:
-- Write up and demo: https://teddysc.me/blog/questdb-rest
-- Interactive QuestDB Shell: https://teddysc.me/blog/rlwrap-questdb-shell
-- GitHub: https://github.com/tddschn/questdb-rest
-- PyPI: https://pypi.org/project/questdb-rest/""",
+        epilog="This CLI can also be used as a Python library.\n\nLinks:\n- Write up and demo: https://teddysc.me/blog/questdb-rest\n- Interactive QuestDB Shell: https://teddysc.me/blog/rlwrap-questdb-shell\n- GitHub: https://github.com/tddschn/questdb-rest\n- PyPI: https://pypi.org/project/questdb-rest/",
     )
     parser.add_argument(
         "-h",
@@ -3095,15 +3058,12 @@ Links:
         default=argparse.SUPPRESS,
         help="Show this help message and exit.",
     )
-
     # Add global arguments
     _add_parser_global(parser)
-
     # Add subparsers
     subparsers = parser.add_subparsers(
         dest="command", required=True, help="Available sub-commands"
     )
-
     # Add subcommand arguments
     _add_parser_imp(subparsers)
     _add_parser_exec(subparsers)
@@ -3115,30 +3075,55 @@ Links:
     _add_parser_drop(subparsers)
     _add_parser_dedupe(subparsers)
     _add_parser_gen_config(subparsers)
-
     # Parse arguments
     try:
         args = parser.parse_args()
         # Add requires_client default if not set by a specific command (like gen-config)
         if not hasattr(args, "requires_client"):
             args.requires_client = True
-
         # --- Post-parsing validation ---
-        if args.command == "drop" and args.table_names and args.file:
-            # Use parser.error which exits appropriately
-            parser.error(
-                "argument -f/--file: not allowed with positional table name arguments"
-            )
-            # Alternatively:
-            # logger.error("Cannot provide both positional table names and use --file. Exiting.")
-            # sys.exit(2) # Exit code 2 for usage errors
-
+        # Validation for commands accepting multiple table name inputs
+        multi_table_commands = ["drop", "chk", "schema", "dedupe"]
+        if args.command in multi_table_commands:
+            has_positional_args = bool(getattr(args, "table_names", None))
+            has_file_arg = bool(getattr(args, "file", None))
+            is_stdin_piped = not sys.stdin.isatty()
+            input_sources = sum([has_positional_args, has_file_arg, is_stdin_piped])
+            if input_sources > 1:
+                parser.error(
+                    f"For '{args.command}', provide table names via positional arguments, --file, OR stdin, not multiple."
+                )
+            if input_sources == 0:
+                # If no input is provided via args, file, or stdin, it's an error
+                parser.error(
+                    f"For '{args.command}', table names must be provided via positional arguments, --file, or stdin."
+                )
+            # Specific validation for file vs positional args
+            if has_positional_args and has_file_arg:
+                parser.error(
+                    f"argument -f/--file: not allowed with positional table name arguments for command '{args.command}'"
+                )
         # Set default action for dedupe if none specified
-        if args.command == "dedupe" and not (args.enable or args.disable or args.check):
-            args.check = True  # Default to check
-
+        if args.command == "dedupe":
+            if not (args.enable or args.disable or args.check):
+                args.check = True  # Default to check
+            # Validate --upsert-keys usage
+            if args.enable and (not args.upsert_keys):
+                parser.error("argument --enable: requires --upsert-keys to be set.")
+            if (args.disable or args.check) and args.upsert_keys:
+                parser.error(
+                    "argument --upsert-keys: only allowed when using --enable."
+                )
+        # Validation for exec --create-table
+        if args.command == "exec":
+            if args.create_table and (not args.new_table_name):
+                parser.error("--new-table-name is required when using --create-table.")
+        # Validation for rename old == new
+        if args.command == "rename":
+            if args.old_table_name == args.new_table_name:
+                parser.error("Old and new table names cannot be the same.")
+        # Validation for cor query input (check happens in handler now)
         return args
-
     except SystemExit as e:  # Catch argparse errors specifically
         # Argparse already prints help/errors, just exit
         sys.exit(e.code if e.code is not None else 1)
@@ -3153,14 +3138,12 @@ Links:
 def main():
     """Main entry point for the CLI."""
     args = get_args()
-
     # Set logging level based on args
     log_level = logging.WARNING
     if args.info:
         log_level = logging.INFO
     elif args.debug:
         log_level = logging.DEBUG
-
     # Also set level for the CLI's own logger if needed for specific CLI messages
     logger.setLevel(log_level)
     # Configure logging for the questdb_rest library as well
@@ -3170,24 +3153,26 @@ def main():
     if not library_logger.hasHandlers():
         handler = logging.StreamHandler(sys.stderr)
         # Match the CLI's formatter for consistency
-        formatter = logging.Formatter(
-            "%(levelname)s: %(message)s"  # Simpler format like CLI logger
-        )
+        # Simpler format like CLI logger
+        formatter = logging.Formatter("%(levelname)s: %(message)s")
         handler.setFormatter(formatter)
         library_logger.addHandler(handler)
-
     if (
         log_level <= logging.INFO
     ):  # Print info/debug startup messages only if level appropriate
         logger.info(f"Log level set to {logging.getLevelName(log_level)}")
     if log_level == logging.DEBUG:
         logger.debug("Debug logging enabled for CLI and library.")
-
     # --- Handle Password Prompting ---
     # This needs to happen *before* client initialization, but *after* parsing args
     # Only prompt if a user is provided, no password is given, not dry run, and client is needed
     actual_password = args.password
-    if args.requires_client and args.user and not args.password and not args.dry_run:
+    if (
+        args.requires_client
+        and args.user
+        and (not args.password)
+        and (not args.dry_run)
+    ):
         # Check config file *first* before prompting
         config_to_check = args.config or os.path.expanduser(
             "~/.questdb-rest/config.json"
@@ -3214,7 +3199,6 @@ def main():
                 logger.debug(
                     f"Error loading config file {config_to_check} for password check: {e}"
                 )
-
         # Prompt if password wasn't loaded from config
         if actual_password is None:  # Check again after attempting config load
             try:
@@ -3232,7 +3216,6 @@ def main():
                         host_for_prompt = config.get("host", DEFAULT_HOST)
                     except Exception:
                         pass  # Stick with default host if config load fails here
-
                 prompt_str = f"Password for user '{args.user}' at {host_for_prompt}: "
                 actual_password = getpass(prompt_str)
                 if not actual_password:  # Handle empty input during prompt
@@ -3241,13 +3224,12 @@ def main():
             except (EOFError, KeyboardInterrupt):
                 logger.info("\nOperation cancelled during password input.")
                 sys.exit(130)
-
     # --- Validate Command Specific Args ---
     # Validation is now performed within get_args() where parser is available,
     # or can be moved to specific handler functions if preferred.
     # Keeping some basic validation here for demonstration if needed.
     if args.command == "imp":
-        if args.name_func == "add_prefix" and not args.name_func_prefix:
+        if args.name_func == "add_prefix" and (not args.name_func_prefix):
             logger.debug(
                 "Using default empty prefix for 'add_prefix' name function as --name-func-prefix was not provided."
             )
@@ -3261,7 +3243,7 @@ def main():
             pass
     elif args.command == "exec":
         # Check if create-table is used without new-table-name
-        if args.create_table and not args.new_table_name:
+        if args.create_table and (not args.new_table_name):
             # This validation should ideally be in get_args or using argparse logic
             logger.error(
                 "--new-table-name is required when using --create-table. Exiting."
@@ -3270,8 +3252,8 @@ def main():
         # Check if query source is missing (stdin check happens in handler)
         if (
             not args.query
-            and not args.file
-            and not args.get_query_from_python_module
+            and (not args.file)
+            and (not args.get_query_from_python_module)
             and sys.stdin.isatty()
         ):
             # This validation should ideally be in get_args or using argparse logic
@@ -3285,7 +3267,7 @@ def main():
             logger.error("Old and new table names cannot be the same. Exiting.")
             sys.exit(2)
     elif args.command == "dedupe":  # New validation for dedupe
-        if args.enable and not args.upsert_keys:
+        if args.enable and (not args.upsert_keys):
             # This validation should ideally be in get_args or using argparse logic
             logger.error("--upsert-keys are required when using --enable. Exiting.")
             sys.exit(2)
@@ -3295,16 +3277,14 @@ def main():
                 "--upsert-keys should only be provided with --enable. Exiting."
             )
             sys.exit(2)
-
     # --- Instantiate Client (if needed and not dry run) ---
     client = None
-    if args.requires_client and not args.dry_run:
+    if args.requires_client and (not args.dry_run):
         try:
             # Check if host already contains a scheme
             detected_scheme = None
             actual_host = args.host
             final_scheme = args.scheme  # Start with CLI arg scheme
-
             if args.host:
                 detected_scheme, actual_host = detect_scheme_in_host(args.host)
                 if detected_scheme:
@@ -3313,19 +3293,19 @@ def main():
                     )
                     # Override scheme if detected in host, unless explicitly provided via --scheme
                     if final_scheme is None:  # Only override if --scheme wasn't given
-                        final_scheme = detected_scheme
-
+                        final_scheme = detected_scheme  # Use the host without scheme
+            # Use potentially prompted/config password
+            # Use the finally decided scheme
             client_kwargs = {
-                "host": actual_host,  # Use the host without scheme
+                "host": actual_host,
                 "port": args.port,
                 "user": args.user,
-                "password": actual_password,  # Use potentially prompted/config password
+                "password": actual_password,
                 "timeout": args.timeout,
-                "scheme": final_scheme,  # Use the finally decided scheme
+                "scheme": final_scheme,
             }
             # Filter out None values so client uses its defaults/config loading
             filtered_kwargs = {k: v for k, v in client_kwargs.items() if v is not None}
-
             if args.config:
                 # If a specific config file is given via --config, use from_config_file
                 # We prioritize command-line args over the config file if both are present.
@@ -3336,7 +3316,6 @@ def main():
                     )
                     # Load base settings from the specified config file
                     base_client = QuestDBClient.from_config_file(args.config)
-
                     # Prepare overrides from CLI args (only if they were actually provided)
                     # Use filtered_kwargs which already has the resolved CLI args + password + scheme
                     # Get the base client's values to compare
@@ -3353,7 +3332,6 @@ def main():
                     base_user = base_client.auth[0] if base_client.auth else None
                     base_password = base_client.auth[1] if base_client.auth else None
                     base_timeout = base_client.timeout
-
                     # Build final kwargs prioritizing CLI args (already in filtered_kwargs) over config file
                     final_kwargs_from_config = {
                         "host": filtered_kwargs.get("host", base_host),
@@ -3363,12 +3341,10 @@ def main():
                         "timeout": filtered_kwargs.get("timeout", base_timeout),
                         "scheme": filtered_kwargs.get("scheme", base_scheme),
                     }
-
                     client = QuestDBClient(**final_kwargs_from_config)
                     logger.debug(
                         f"Client initialized from {args.config} and potentially updated with CLI args."
                     )
-
                 except FileNotFoundError:
                     logger.error(f"Config file not found: {args.config}")
                     sys.exit(1)
@@ -3378,14 +3354,12 @@ def main():
                 except Exception as conf_err:
                     logger.error(f"Error loading config file {args.config}: {conf_err}")
                     sys.exit(1)
-
             else:
                 # Standard initialization: uses CLI args > ~/.questdb-rest/config.json > defaults
                 logger.debug(
                     "Initializing client using command-line arguments and/or default config (~/.questdb-rest/config.json)."
                 )
                 client = QuestDBClient(**filtered_kwargs)
-
             # Log final connection details (mask password)
             log_host = client.base_url.split("://")[1].split(":")[0]
             # Correctly extract port even without trailing slash
@@ -3400,7 +3374,6 @@ def main():
             logger.info(
                 f"Connecting to {log_scheme}://{log_host}:{log_port}{log_user_info}"
             )
-
         except (QuestDBError, ValueError) as e:
             logger.error(f"Failed to initialize QuestDB client: {e}")
             sys.exit(1)
@@ -3409,7 +3382,6 @@ def main():
                 f"An unexpected error occurred during client initialization: {e}"
             )
             sys.exit(1)
-
     # Call the appropriate handler function
     try:
         # Pass the client instance (or None for dry run/gen-config) and args to the handler
@@ -3422,14 +3394,15 @@ def main():
         sys.exit(
             e.code if e.code is not None else 0
         )  # Default to exit 0 if code is None
-    except (QuestDBConnectionError, QuestDBAPIError, QuestDBError) as e:
+    except (QuestDBConnectionError, QuestDBAPIError, QuestDBError):
         # Catch specific client errors that might not be caught in handlers
         # Logged by client already, just exit non-zero
         # logger.error(f"QuestDB Error: {e}") # Redundant logging
         sys.exit(1)
     except Exception as e:
         # Catch-all for unexpected errors in command handlers
-        logger.exception(  # Use exception to log traceback for unexpected errors
+        # Use exception to log traceback for unexpected errors
+        logger.exception(
             f"An unexpected error occurred during command '{args.command}': {e}"
         )
         sys.exit(1)
@@ -3447,7 +3420,6 @@ if __name__ == "__main__":
             return args[0] if args else None
 
         pass  # Keep native Python logging
-
     try:
         main()
     except SystemExit as e:
