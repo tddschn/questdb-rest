@@ -32,6 +32,7 @@ from questdb_rest import (
     QuestDBError,
     QuestDBConnectionError,
     QuestDBAPIError,
+    __version__,
 )
 
 # --- Configuration ---
@@ -2485,6 +2486,12 @@ def detect_scheme_in_host(host_str):
 
 def _add_parser_global(parser: argparse.ArgumentParser):
     """Adds global arguments to the main parser."""
+    parser.add_argument(
+        # "-V",
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+    )
     parser.add_argument(
         "-H",
         "--host",
