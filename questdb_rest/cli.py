@@ -2946,18 +2946,17 @@ def _add_parser_drop(subparsers: argparse._SubParsersAction):
         help="Show this help message and exit.",
     )
 
-    # Mutually exclusive group for table name input
-    input_group = parser_drop.add_mutually_exclusive_group(required=False)
-    input_group.add_argument(
+    # Remove the mutually exclusive group for inputs, validation will be done after parsing.
+    parser_drop.add_argument(
         "table_names",
-        nargs="*",  # Changed from '+' to '*' to make it optional
+        nargs="*",  # Accepts zero or more table names as positional arguments.
         help="Name(s) of the table(s) to drop (provided as arguments).",
         metavar="TABLE_NAME",
     )
-    input_group.add_argument(
+    parser_drop.add_argument(
         "-f",
         "--file",
-        help="Path to file containing table names (one per line).",
+        help="Path to file containing table names (one per line). Cannot be used if table names are provided as arguments.",
         metavar="FILE_PATH",
     )
     # Implicit stdin reading if neither table_names nor --file is given
@@ -3085,6 +3084,16 @@ Links:
         if not hasattr(args, "requires_client"):
             args.requires_client = True
 
+        # --- Post-parsing validation ---
+        if args.command == "drop" and args.table_names and args.file:
+            # Use parser.error which exits appropriately
+            parser.error(
+                "argument -f/--file: not allowed with positional table name arguments"
+            )
+            # Alternatively:
+            # logger.error("Cannot provide both positional table names and use --file. Exiting.")
+            # sys.exit(2) # Exit code 2 for usage errors
+
         # Set default action for dedupe if none specified
         if args.command == "dedupe" and not (args.enable or args.disable or args.check):
             args.check = True  # Default to check
@@ -3097,7 +3106,9 @@ Links:
     except Exception as e:
         parser.print_usage(sys.stderr)
         logger.error(f"Argument parsing error: {e}")
-        sys.exit(2)  # Use exit code 2 for CLI usage errors
+        sys.exit(
+            2
+        )  # Use exit code 2 for CLI usage errors  # Use exit code 2 for CLI usage errors
 
 
 def main():
