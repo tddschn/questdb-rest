@@ -147,6 +147,7 @@ $ qdb-cli rename trips taxi_trips_feb_2018
     - [`dedupe` check, enable, disable](#dedupe-check-enable-disable)
   - [Examples](#examples)
     - [Advanced Scripting](#advanced-scripting)
+    - [Drop all backup tables with UUID4 in the name](#drop-all-backup-tables-with-uuid4-in-the-name)
   - [PyPI packages and installation](#pypi-packages-and-installation)
   - [The Python API](#the-python-api)
   - [Screenshots](#screenshots)
@@ -528,6 +529,73 @@ For convenience, I included a bash script `qdb-drop-tables-by-regex` and `qdb-im
 
 ```bash
 curl 'https://raw.githubusercontent.com/your/test.csv' | qdb-imp-from-stdin -n your_table_name
+```
+
+### Drop all backup tables with UUID4 in the name
+
+
+```plain
+# dry run first:
+qdb-table-names backup --uuid | qdb-cli --dry-run drop
+
+{
+  "dry_run": true,
+  "table_dropped": "qdb_cli_backup_cme_liq_ba_LE_0ae696bb_076e_4c0e_b7ba_3999e8939c89",
+  "ddl": "OK (Simulated)"
+}
+{
+  "dry_run": true,
+  "table_dropped": "qdb_cli_backup_cme_liq_ba_LE_96042ea7_d2eb_4455_a8d3_250ab75f347a",
+  "ddl": "OK (Simulated)"
+}
+
+# destructive command, be careful!
+qdb-table-names backup --uuid | qdb-cli drop
+
+{
+  "status": "OK",
+  "table_dropped": "qdb_cli_backup_cme_liq_ba_LE_0ae696bb_076e_4c0e_b7ba_3999e8939c89",
+  "message": "Table 'qdb_cli_backup_cme_liq_ba_LE_0ae696bb_076e_4c0e_b7ba_3999e8939c89' dropped successfully.",
+  "ddl_response": "OK"
+}
+
+{
+  "status": "OK",
+  "table_dropped": "qdb_cli_backup_cme_liq_ba_LE_96042ea7_d2eb_4455_a8d3_250ab75f347a",
+  "message": "Table 'qdb_cli_backup_cme_liq_ba_LE_96042ea7_d2eb_4455_a8d3_250ab75f347a' dropped successfully.",
+  "ddl_response": "OK"
+}
+
+```
+
+```plain
+# yes, this command is installed if you install the Python package
+$ qdb-table-names --help
+
+Usage: qdb-table-names [--uuid] [regex]
+
+Get a list of table names from QuestDB.
+If you provide a regex, only tables whose name matches will be returned.
+If you pass --uuid, only tables whose name contains a UUID-4 (dash or underscore) will be returned.
+You can combine --uuid and regex to apply both filters.
+
+OPTIONS:
+  -h, --help    Show this help message and exit
+  --uuid        Match only tables containing a UUID-4 in their name
+
+EXAMPLES:
+  # list all table names
+  qdb-table-names
+
+  # list only tables containing a UUID-4
+  qdb-table-names --uuid
+
+  # list only tables starting with "equities_"
+  qdb-table-names equities_
+
+  # list only tables starting with "equities_" that also contain a UUID-4
+  qdb-table-names --uuid equities_
+
 ```
 
 ## PyPI packages and installation
