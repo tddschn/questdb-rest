@@ -605,6 +605,78 @@ EXAMPLES:
 
 Besides `qdb-cli drop` (see example right above), these subcommands also support reading table names (1 per line) from stdin: `chk`, `dedupe`, `schema`.
 
+Examples:
+
+```plain
+qdb-table-names cme_liq | qdb-cli chk 
+{
+  "tableName": "cme_liq_ba_LE",
+  "status": "Exists"
+}
+{
+  "tableName": "cme_liq_ba_HG",
+  "status": "Exists"
+}
+{
+  "tableName": "cme_liq_ba_SI",
+  "status": "Exists"
+}
+{
+  "tableName": "cme_liq_ba_GC",
+  "status": "Exists"
+}
+```
+
+```sql
+-- run this:
+-- qdb-table-names cme_liq | qdb-cli schema
+CREATE TABLE 'cme_liq_ba_LE' ( 
+        CT VARCHAR,
+        MP DOUBLE,
+        LVL1A DOUBLE,
+        LVL2A DOUBLE,
+        LVL3A DOUBLE,
+        LVL4A DOUBLE,
+        LVL5A DOUBLE,
+        WT LONG,
+        timestamp TIMESTAMP
+) timestamp(timestamp) PARTITION BY YEAR WAL
+WITH maxUncommittedRows=500000, o3MaxLag=600000000us
+DEDUP UPSERT KEYS(timestamp);
+
+
+CREATE TABLE 'cme_liq_ba_HG' ( 
+        MP DOUBLE,
+        LVL1B DOUBLE,
+        LVL1A DOUBLE,
+        LVL2B DOUBLE,
+        LVL2A DOUBLE,
+        LVL3B DOUBLE,
+        LVL3A DOUBLE,
+        LVL4B DOUBLE,
+        LVL10B DOUBLE,
+        LVL10A DOUBLE,
+        CT VARCHAR,
+        LVL4A DOUBLE,
+        LVL5B DOUBLE,
+        LVL5A DOUBLE,
+        LVL6B DOUBLE,
+        LVL6A DOUBLE,
+        LVL7B DOUBLE,
+        LVL7A DOUBLE,
+        LVL8B DOUBLE,
+        LVL8A DOUBLE,
+        LVL9B DOUBLE,
+        WT LONG,
+        LVL9A DOUBLE,
+        timestamp TIMESTAMP
+) timestamp(timestamp) PARTITION BY DAY WAL
+WITH maxUncommittedRows=500000, o3MaxLag=600000000us
+DEDUP UPSERT KEYS(timestamp);
+
+-- ...
+```
+
 ## PyPI packages and installation
 
 `questdb-cli`, `questdb-rest` and `questdb-api` are the same package (just aliases), with `questdb-rest` guaranteed to be the most updated.
