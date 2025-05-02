@@ -148,6 +148,7 @@ $ qdb-cli rename trips taxi_trips_feb_2018
   - [Examples](#examples)
     - [Advanced Scripting](#advanced-scripting)
     - [Drop all backup tables with UUID4 in the name](#drop-all-backup-tables-with-uuid4-in-the-name)
+    - [Piping query or table names from stdin](#piping-query-or-table-names-from-stdin)
   - [PyPI packages and installation](#pypi-packages-and-installation)
   - [The Python API](#the-python-api)
   - [Screenshots](#screenshots)
@@ -597,6 +598,12 @@ EXAMPLES:
   qdb-table-names --uuid equities_
 
 ```
+
+### Piping query or table names from stdin
+
+`qdb-cli exec` supports reading multiple queries (delimited by `;`) from stdin, or from a file.
+
+Besides `qdb-cli drop` (see example right above), these subcommands also support reading table names (1 per line) from stdin: `chk`, `dedupe`, `schema`.
 
 ## PyPI packages and installation
 
