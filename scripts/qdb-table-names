@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+print_help() {
+    cat <<EOF
+Usage: $(basename "$0") [regex]
+
+Get a list of table names from QuestDB.
+If you provide a regex, only tables whose name matches will be returned.
+
+OPTIONS:
+  -h, --help    Show this help message and exit
+
+EXAMPLE:
+  # list all table names
+  $(basename "$0")
+
+  # list only tables starting with "equities_"
+  $(basename "$0") equities_
+EOF
+}
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -h | --help)
+        print_help
+        exit 0
+        ;;
+    --) # end of options
+        shift
+        break
+        ;;
+    -*) # unknown option
+        echo "Unknown option: $1" >&2
+        print_help
+        exit 1
+        ;;
+    *) # first non-option arg is the regex
+        break
+        ;;
+    esac
+done
+
+# At this point, $1 is either the regex (if any) or empty
+regex="${1:-}"
+
+# Build the SQL query
+if [[ -n "$regex" ]]; then
+    # wrap the regex in single quotes
+    query="SELECT table_name FROM tables WHERE table_name ~ '${regex}'"
+else
+    # no WHERE clause
+    query="SELECT table_name FROM tables"
+fi
+
+# Execute and post-process
+qdb-cli exp "$query" |
+    tail -n +2 | # drop header
+    tr -d '"'    # strip any quotes
