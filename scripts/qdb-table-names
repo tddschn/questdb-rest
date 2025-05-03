@@ -6,20 +6,21 @@ UUID_REGEX='[0-9a-f]{8}([-_][0-9a-f]{4}){3}[-_][0-9a-f]{12}'
 
 print_help() {
     cat <<EOF
-Usage: $(basename "$0") [-u|--uuid] [-U|--no-uuid] [regex]
+Usage: $(basename "$0") [-u|--uuid] [-U|--no-uuid] [-l|--min-length N] [-L|--max-length N] [regex]
 
 Get a list of table names from QuestDB.
-If you provide a regex, only tables whose name matches will be returned.
--u, --uuid      Only tables containing a UUID-4 in their name
--U, --no-uuid   Only tables NOT containing a UUID-4 in their name
-You may combine either UUID flag with an additional regex, but -u and -U are mutually exclusive.
 
-OPTIONS:
-  -h, --help     Show this help message and exit
-  -u, --uuid     Match only tables containing a UUID-4 in their name
-  -U, --no-uuid  Match only tables NOT containing a UUID-4 in their name
+Options:
+  -h, --help           Show this help message and exit
+  -u, --uuid           Only tables containing a UUID-4 in their name
+  -U, --no-uuid        Only tables NOT containing a UUID-4 in their name
+  -l, --min-length N   Only tables with name length >= N
+  -L, --max-length N   Only tables with name length <= N
 
-EXAMPLES:
+You may combine one UUID flag with length filters and/or an additional regex.
+-u and -U are mutually exclusive.
+
+Examples:
   # list all table names
   $(basename "$0")
 
@@ -29,18 +30,19 @@ EXAMPLES:
   # list only tables NOT containing a UUID-4
   $(basename "$0") -U
 
-  # list only tables starting with "equities_"
-  $(basename "$0") equities_
+  # list tables with name length between 5 and 20
+  $(basename "$0") -l 5 -L 20
 
-  # combine regex and UUID-flag
-  $(basename "$0") -u equities_
-  $(basename "$0") -U equities_
+  # combine regex, UUID, and length filters
+  $(basename "$0") -u -l 10 equities_
 EOF
 }
 
-# Default flags
+# Default flags and filters
 uuid_flag=false
 no_uuid_flag=false
+min_length=""
+max_length=""
 
 # Parse options
 while [[ $# -gt 0 ]]; do
@@ -57,6 +59,24 @@ while [[ $# -gt 0 ]]; do
         no_uuid_flag=true
         shift
         ;;
+    -l | --min-length)
+        if [[ -n "${2:-}" ]]; then
+            min_length="$2"
+            shift 2
+        else
+            echo "Error: --min-length requires a number" >&2
+            exit 1
+        fi
+        ;;
+    -L | --max-length)
+        if [[ -n "${2:-}" ]]; then
+            max_length="$2"
+            shift 2
+        else
+            echo "Error: --max-length requires a number" >&2
+            exit 1
+        fi
+        ;;
     --)
         shift
         break
@@ -70,9 +90,10 @@ while [[ $# -gt 0 ]]; do
         break
         ;;
     esac
+
 done
 
-# Enforce mutual exclusivity
+# Enforce mutual exclusivity of UUID flags
 if [[ "$uuid_flag" == true && "$no_uuid_flag" == true ]]; then
     echo "Error: options -u|--uuid and -U|--no-uuid are mutually exclusive." >&2
     exit 1
@@ -91,6 +112,12 @@ if [[ "$uuid_flag" == true ]]; then
 elif [[ "$no_uuid_flag" == true ]]; then
     conds+=("table_name !~ '${UUID_REGEX}'")
 fi
+if [[ -n "$min_length" ]]; then
+    conds+=("length(table_name) >= ${min_length}")
+fi
+if [[ -n "$max_length" ]]; then
+    conds+=("length(table_name) <= ${max_length}")
+fi
 
 # Assemble WHERE clause
 if ((${#conds[@]})); then
@@ -107,4 +134,5 @@ query="SELECT table_name FROM tables ${where_clause}"
 # Execute and clean up output
 qdb-cli exp "$query" |
     tail -n +2 | # drop header row
-    tr -d '"'    # strip quotes
+    tr -d '"' |  # strip quotes
+    tr -d '\r'
