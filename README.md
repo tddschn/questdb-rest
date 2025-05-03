@@ -576,30 +576,35 @@ qdb-table-names backup --uuid | qdb-cli drop
 # yes, this command is installed if you install the Python package
 $ qdb-table-names --help
 
-Usage: qdb-table-names [--uuid] [regex]
+Usage: qdb-table-names [-u|--uuid] [-U|--no-uuid] [regex]
 
 Get a list of table names from QuestDB.
 If you provide a regex, only tables whose name matches will be returned.
-If you pass --uuid, only tables whose name contains a UUID-4 (dash or underscore) will be returned.
-You can combine --uuid and regex to apply both filters.
+-u, --uuid      Only tables containing a UUID-4 in their name
+-U, --no-uuid   Only tables NOT containing a UUID-4 in their name
+You may combine either UUID flag with an additional regex, but -u and -U are mutually exclusive.
 
 OPTIONS:
-  -h, --help    Show this help message and exit
-  --uuid        Match only tables containing a UUID-4 in their name
+  -h, --help     Show this help message and exit
+  -u, --uuid     Match only tables containing a UUID-4 in their name
+  -U, --no-uuid  Match only tables NOT containing a UUID-4 in their name
 
 EXAMPLES:
   # list all table names
   qdb-table-names
 
   # list only tables containing a UUID-4
-  qdb-table-names --uuid
+  qdb-table-names -u
+
+  # list only tables NOT containing a UUID-4
+  qdb-table-names -U
 
   # list only tables starting with "equities_"
   qdb-table-names equities_
 
-  # list only tables starting with "equities_" that also contain a UUID-4
-  qdb-table-names --uuid equities_
-
+  # combine regex and UUID-flag
+  qdb-table-names -u equities_
+  qdb-table-names -U equities_
 ```
 
 ### Piping query or table names from stdin
