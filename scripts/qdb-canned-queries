@@ -80,10 +80,15 @@ if [[ -z "$TABLE" ]]; then
     exit 1
 fi
 
+# Ensure table/column names with spaces or special chars are handled (using quotes in SQL)
+# Basic quoting - adjust if table/col names can contain double quotes themselves
+SAFE_TABLE="${TABLE//\"/\\\"}"
+SAFE_COL="${COL//\"/\\\"}"
+
 # Build the SQL
 case "$MODE" in
 count)
-    SQL="select count() from \"${TABLE}\";"
+    SQL="select count() from \"${SAFE_TABLE}\";"
     ;;
 distinct)
     if [[ -z "$COL" ]]; then
@@ -91,7 +96,7 @@ distinct)
         show_help
         exit 1
     fi
-    SQL="select distinct (\"${COL}\") from \"${TABLE}\";"
+    SQL="select distinct (\"${SAFE_COL}\") from \"${SAFE_TABLE}\";"
     ;;
 distinct_count)
     if [[ -z "$COL" ]]; then
@@ -99,31 +104,47 @@ distinct_count)
         show_help
         exit 1
     fi
-    SQL="select distinct (\"${COL}\"), count() from \"${TABLE}\";"
+    SQL="select distinct (\"${SAFE_COL}\"), count() from \"${SAFE_TABLE}\";"
     ;;
 esac
 
-# Prepare the command
+# Prepare the command arguments (no eval needed now)
+CMD_ARRAY=()
+POST_PROCESS_PIPE=""
+
 if [[ "$MODE" == "distinct_count" ]]; then
-    CMD_STR="qdb-cli exec --psql -q \"${SQL}\""
+    CMD_ARRAY=(qdb-cli exec --psql -q "$SQL")
 else
-    CMD_STR="qdb-cli exp \"${SQL}\" | tail -n +2 | tr -d '\"' | tr -d '\r'"
+    CMD_ARRAY=(qdb-cli exp "$SQL")
+    # Use a function for post-processing to avoid complex quoting with pipes
+    post_process() {
+        tail -n +2 | tr -d '"' | tr -d '\r'
+    }
+fi
+
+# Construct the string representation for dry-run/verbose output
+CMD_STR="${CMD_ARRAY[*]}"
+if [[ -n "$POST_PROCESS_PIPE" ]] || [[ "$MODE" != "distinct_count" ]]; then
+    CMD_STR+=" | tail -n +2 | tr -d '\"' | tr -d '\\r'"
 fi
 
 # Dry run?
 if [[ $DRY_RUN -eq 1 ]]; then
-    echo "Dry run: $CMD_STR"
+    # Use printf for safer output of the command string
+    printf "Dry run: %s\n" "$CMD_STR"
     exit 0
 fi
 
 # Verbose?
 if [[ $VERBOSE -eq 1 ]]; then
-    echo "Running: $CMD_STR"
+    printf "Running: %s\n" "$CMD_STR"
 fi
 
 # Execute
 if [[ "$MODE" == "distinct_count" ]]; then
-    eval qdb-cli exec --psql -q "'${SQL}'"
+    # Execute directly
+    "${CMD_ARRAY[@]}"
 else
-    eval qdb-cli exp "'${SQL}'" \| tail -n +2 \| tr -d '"' \| tr -d '\r'
+    # Execute and pipe to post-processing function
+    "${CMD_ARRAY[@]}" | post_process
 fi

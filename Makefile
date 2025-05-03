@@ -28,4 +28,7 @@ yapf:
 gitingest:
 	gitingest questdb_rest -o $(GITINGEST_OUTPUT_FILE) && rpp_ $(GITINGEST_OUTPUT_FILE)
 
+ging_:
+	gitingest_api_cli.py tddschn/questdb-rest
+
 .PHONE: *
