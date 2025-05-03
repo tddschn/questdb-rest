@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+
+show_help() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] <table_name> [<col_name>]
+Run a qdb-cli export and clean up the output.
+
+Modes (mutually exclusive):
+  (default)       Count mode:
+                  SELECT count() FROM "<table_name>";
+  -d, --distinct  Distinct mode:
+                  SELECT distinct ("<col_name>") FROM "<table_name>";
+  -c, --count     Distinct count mode:
+                  SELECT distinct ("<col_name>"), count() FROM "<table_name>";
+
+Options:
+  -n, --dry-run   Show the command that would be run, but do not execute it.
+  -v, --verbose   Show the command before running it.
+  -h, --help      Show this help message and exit.
+
+Examples:
+  $(basename "$0") cme_liq_ba_ES
+  $(basename "$0") -d cme_liq_ba_ES CT
+  $(basename "$0") --count cme_liq_ba_ES CT
+  $(basename "$0") -n cme_liq_ba_ES
+  $(basename "$0") -v cme_liq_ba_ES
+EOF
+}
+
+# Default settings
+MODE="count"
+DRY_RUN=0
+VERBOSE=0
+
+# Parse flags
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -d | --distinct)
+        MODE="distinct"
+        shift
+        ;;
+    -c | --count)
+        MODE="distinct_count"
+        shift
+        ;;
+    -n | --dry-run)
+        DRY_RUN=1
+        shift
+        ;;
+    -v | --verbose)
+        VERBOSE=1
+        shift
+        ;;
+    -h | --help)
+        show_help
+        exit 0
+        ;;
+    --) # end of options
+        shift
+        break
+        ;;
+    -*) # unknown option
+        echo "Unknown option: $1" >&2
+        show_help
+        exit 1
+        ;;
+    *) # first non-flag argument
+        break
+        ;;
+    esac
+done
+
+# Positional arguments
+TABLE="$1"
+COL="$2"
+
+if [[ -z "$TABLE" ]]; then
+    echo "Error: <table_name> is required." >&2
+    show_help
+    exit 1
+fi
+
+# Build SQL based on mode
+case "$MODE" in
+count)
+    SQL="select count() from \"${TABLE}\";"
+    ;;
+distinct)
+    if [[ -z "$COL" ]]; then
+        echo "Error: <col_name> is required for distinct mode." >&2
+        show_help
+        exit 1
+    fi
+    SQL="select distinct (\"${COL}\") from \"${TABLE}\";"
+    ;;
+distinct_count)
+    if [[ -z "$COL" ]]; then
+        echo "Error: <col_name> is required for distinct count mode." >&2
+        show_help
+        exit 1
+    fi
+    SQL="select distinct (\"${COL}\"), count() from \"${TABLE}\";"
+    ;;
+esac
+
+# Compose the command string
+CMD_STR="qdb-cli exp \"${SQL}\" | tail -n +2 | tr -d '\"' | tr -d '\r'"
+
+# Dry-run: show and exit
+if [[ $DRY_RUN -eq 1 ]]; then
+    echo "Dry run: $CMD_STR"
+    exit 0
+fi
+
+# Verbose: show before running
+if [[ $VERBOSE -eq 1 ]]; then
+    echo "Running: $CMD_STR"
+fi
+
+# Execute
+qdb-cli exp "${SQL}" |
+    tail -n +2 |
+    tr -d '"' |
+    tr -d '\r'
