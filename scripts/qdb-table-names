@@ -6,87 +6,105 @@ UUID_REGEX='[0-9a-f]{8}([-_][0-9a-f]{4}){3}[-_][0-9a-f]{12}'
 
 print_help() {
     cat <<EOF
-Usage: $(basename "$0") [--uuid] [regex]
+Usage: $(basename "$0") [-u|--uuid] [-U|--no-uuid] [regex]
 
 Get a list of table names from QuestDB.
 If you provide a regex, only tables whose name matches will be returned.
-If you pass --uuid, only tables whose name contains a UUID-4 (dash or underscore) will be returned.
-You can combine --uuid and regex to apply both filters.
+-u, --uuid      Only tables containing a UUID-4 in their name
+-U, --no-uuid   Only tables NOT containing a UUID-4 in their name
+You may combine either UUID flag with an additional regex, but -u and -U are mutually exclusive.
 
 OPTIONS:
-  -h, --help    Show this help message and exit
-  --uuid        Match only tables containing a UUID-4 in their name
+  -h, --help     Show this help message and exit
+  -u, --uuid     Match only tables containing a UUID-4 in their name
+  -U, --no-uuid  Match only tables NOT containing a UUID-4 in their name
 
 EXAMPLES:
   # list all table names
   $(basename "$0")
 
   # list only tables containing a UUID-4
-  $(basename "$0") --uuid
+  $(basename "$0") -u
+
+  # list only tables NOT containing a UUID-4
+  $(basename "$0") -U
 
   # list only tables starting with "equities_"
   $(basename "$0") equities_
 
-  # list only tables starting with "equities_" that also contain a UUID-4
-  $(basename "$0") --uuid equities_
+  # combine regex and UUID-flag
+  $(basename "$0") -u equities_
+  $(basename "$0") -U equities_
 EOF
 }
 
-# default flags
+# Default flags
 uuid_flag=false
+no_uuid_flag=false
 
-# parse options
+# Parse options
 while [[ $# -gt 0 ]]; do
     case "$1" in
     -h | --help)
         print_help
         exit 0
         ;;
-    --uuid)
+    -u | --uuid)
         uuid_flag=true
         shift
         ;;
-    --) # end of options
+    -U | --no-uuid)
+        no_uuid_flag=true
+        shift
+        ;;
+    --)
         shift
         break
         ;;
-    -*) # unknown option
+    -*)
         echo "Unknown option: $1" >&2
         print_help
         exit 1
         ;;
-    *) # first non-option is regex
+    *)
         break
         ;;
     esac
 done
 
-# positional regex (if any)
+# Enforce mutual exclusivity
+if [[ "$uuid_flag" == true && "$no_uuid_flag" == true ]]; then
+    echo "Error: options -u|--uuid and -U|--no-uuid are mutually exclusive." >&2
+    exit 1
+fi
+
+# Positional regex (if any)
 regex="${1:-}"
 
-# build WHERE clauses
+# Build WHERE clauses
 conds=()
 if [[ -n "$regex" ]]; then
     conds+=("table_name ~ '${regex}'")
 fi
-if [[ "$uuid_flag" = true ]]; then
+if [[ "$uuid_flag" == true ]]; then
     conds+=("table_name ~ '${UUID_REGEX}'")
+elif [[ "$no_uuid_flag" == true ]]; then
+    conds+=("table_name !~ '${UUID_REGEX}'")
 fi
 
-# assemble WHERE clause
+# Assemble WHERE clause
 if ((${#conds[@]})); then
-    # join with AND
     joined=$(printf '%s AND ' "${conds[@]}")
-    joined=${joined% AND } # strip trailing " AND "
+    joined=${joined% AND }
     where_clause="WHERE ${joined}"
 else
     where_clause=""
 fi
 
-# final query
+# Construct final query
 query="SELECT table_name FROM tables ${where_clause}"
 
-# execute and clean up output
+# Execute and clean up output
 qdb-cli exp "$query" |
     tail -n +2 | # drop header row
     tr -d '"'    # strip quotes
