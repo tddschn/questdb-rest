@@ -9,7 +9,7 @@ from typing import Optional, Dict, Any, Union, IO, Tuple
 # consts
 # --------------------
 
-__version__ = "3.4.0"
+__version__ = "3.5.0"
 CLI_EPILOG = """This CLI can also be used as a Python library.
 
 Links:
