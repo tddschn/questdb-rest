@@ -713,14 +713,14 @@ CREATE TABLE 'cme_liq_ba_6S' (
 ) timestamp(timestamp) PARTITION BY DAY WAL
 WITH maxUncommittedRows=500000, o3MaxLag=600000000us
 DEDUP UPSERT KEYS(timestamp);
-❯ qdbr cme_liq_ba_6S -q cme_liq_ba_6S -k timestamp -P YEAR
+❯ qdb-cli cor cme_liq_ba_6S -q cme_liq_ba_6S -k timestamp -P YEAR
 WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
 WARNING: Query: cme_liq_ba_6S
 WARNING: QuestDB API Error: HTTP 400: partitioning is possible only on tables with designated timestamps
 WARNING: Response Body: {"query": "CREATE TABLE __qdb_cli_temp_cme_liq_ba_6S_683ce6ae_9c45_4bd1_836a_b1184075dea2 AS (cme_liq_ba_6S) PARTITION BY YEAR DEDUP UPSERT KEYS(timestamp);", "error": "partitioning is possible only on tables with designated timestamps", "position": 111}
 ERROR: Error creating temporary table '__qdb_cli_temp_cme_liq_ba_6S_683ce6ae_9c45_4bd1_836a_b1184075dea2': HTTP 400: HTTP 400: partitioning is possible only on tables with designated timestamps
 [1]    64741 exit 1     command questdb-cli cor cme_liq_ba_6S -q cme_liq_ba_6S -k timestamp -P YEAR
-❯ qdbr cme_liq_ba_6S -q cme_liq_ba_6S -k timestamp -P YEAR -t timestamp
+❯ qdb-cli cor cme_liq_ba_6S -q cme_liq_ba_6S -k timestamp -P YEAR -t timestamp
 WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
 WARNING: Query: cme_liq_ba_6S
 {
