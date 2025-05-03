@@ -15,6 +15,7 @@ packages = [{ include = "questdb_rest" }]
 qdb-cli = "questdb_rest.cli:main"
 questdb-cli = "questdb_rest.cli:main"
 qdb-table-names = { reference = "scripts/qdb-table-names", type = "file" }
+qdb-canned-queries = { reference = "scripts/qdb-canned-queries", type = "file" }
 qdb-drop-tables-by-regex = { reference = "scripts/qdb-drop-tables-by-regex", type = "file" }
 # questdb-drop-tables-by-regex = { reference = "scripts/questdb-drop-tables-by-regex", type = "file" }
 qdb-imp-from-stdin = { reference = "scripts/qdb-imp-from-stdin", type = "file" }
