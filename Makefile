@@ -34,4 +34,7 @@ ging_:
 update-python-functions-from-copied-markdown:
 	update-python-functions-from-copied-markdown.sh questdb_rest/cli.py questdb_rest/__init__.py
 
+update-python-functions-from-copied-markdown-include:
+	update-python-functions-from-copied-markdown-include-new-defs.sh questdb_rest/cli.py questdb_rest/__init__.py
+
 .PHONE: *
