@@ -458,10 +458,10 @@ def simulate_dedupe(args, table_name, index, total):
         logger.info(
             "[DRY-RUN]   Simulating check result based on assumed initial state."
         )
-        simulated_result["deduplication_enabled"] = simulated_dedup_enabled
-        simulated_result["designated_timestamp"] = (
-            simulated_ts  # Will be None if simulated_dedup_enabled is False
+        simulated_result["deduplication_enabled"] = (
+            simulated_dedup_enabled  # Will be None if simulated_dedup_enabled is False
         )
+        simulated_result["designated_timestamp"] = simulated_ts
         simulated_result["upsert_keys"] = simulated_keys
         simulated_result["message"] = (
             f"Checked status (Simulated: enabled={simulated_dedup_enabled})."
@@ -543,9 +543,7 @@ def simulate_create_or_replace(args, query):
         "[DRY-RUN] Simulating create-or-replace-table-from-query (using temp table):"
     )
     logger.info(f"[DRY-RUN]   Target Table: '{target_table}'")
-    logger.info(
-        "[DRY-RUN]   Query Source: (provided via args/stdin)"
-    )  # Simplification
+    logger.info("[DRY-RUN]   Query Source: (provided via args/stdin)")  # Simplification
     logger.info(f"[DRY-RUN]   Temporary Table Name: '{temp_table_name}'")
     # Simulate CREATE TEMP TABLE statement construction
     create_parts = [
@@ -557,6 +555,17 @@ def simulate_create_or_replace(args, query):
         )  # Assuming simple timestamp col name
     if args.partitionBy:
         create_parts.append(f"PARTITION BY {args.partitionBy}")
+    # Simulate adding DEDUP clause if upsert keys are provided
+    if args.upsert_keys:
+        # Basic simulation validation: check if timestamp is included
+        ts_col = args.timestamp
+        if ts_col and ts_col not in args.upsert_keys:
+            logger.warning(
+                f"[DRY-RUN] Warning: Designated timestamp '{ts_col}' is not included in provided --upsert-keys {args.upsert_keys}. The actual command might fail."
+            )
+        keys_str = ", ".join(args.upsert_keys)
+        create_parts.append(f"DEDUP UPSERT KEYS({keys_str})")
+        logger.info(f"[DRY-RUN]   Including DEDUP UPSERT KEYS: {keys_str}")
     create_statement = " ".join(create_parts) + ";"
     logger.info(f"[DRY-RUN]   1. Would execute: {create_statement}")
     # Simulate checking if target table exists (assume it exists for backup simulation)
@@ -602,6 +611,7 @@ def simulate_create_or_replace(args, query):
         f"[DRY-RUN]      Would execute: RENAME TABLE '{temp_table_name}' TO '{target_table}';"
     )
     # Simulate success response
+    # Add info about keys
     print(
         json.dumps(
             {
@@ -609,6 +619,7 @@ def simulate_create_or_replace(args, query):
                 "operation": "create_or_replace_table_from_query",
                 "workflow": "temporary_table",
                 "target_table": target_table,
+                "upsert_keys_specified": args.upsert_keys,
                 "status": "OK (Simulated)",
                 "backup_table": backup_name
                 if original_exists and (not args.no_backup_original_table)
@@ -1746,9 +1757,20 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
             f"CREATE TABLE {temp_table_name} AS ({defining_query})"
         ]  # Use unquoted temp table name
         if safe_timestamp_col:
+            # Validate timestamp is in upsert keys if provided
+            if args.upsert_keys and safe_timestamp_col not in args.upsert_keys:
+                raise ValueError(
+                    f"Designated timestamp column '{safe_timestamp_col}' must be included in --upsert-keys: {args.upsert_keys}"
+                )
             create_parts.append(f"TIMESTAMP({safe_timestamp_col})")
         if args.partitionBy:
             create_parts.append(f"PARTITION BY {args.partitionBy}")
+        # Add DEDUP clause if upsert keys are provided
+        if args.upsert_keys:
+            # Validation already done above if timestamp provided
+            keys_str = ", ".join(args.upsert_keys)
+            create_parts.append(f"DEDUP UPSERT KEYS({keys_str})")
+            logger.info(f"Including DEDUP UPSERT KEYS: {keys_str}")
         create_query = " ".join(create_parts) + ";"
         logger.debug(f"Executing CREATE TEMP statement: {create_query}")
         try:
@@ -1759,13 +1781,23 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                 error_detail = response["error"]
                 if "query" in response:
                     error_detail += f" (Query: {response['query']})"
-                raise QuestDBAPIError(
-                    f"Failed to create temporary table: {error_detail}",
-                    response_data=response,
-                )
+                # Check specific errors like non-WAL
+                if "table must be WAL" in error_detail.lower():
+                    raise QuestDBAPIError(
+                        f"Failed to create temporary table: DEDUP requires table to be WAL. Ensure the base table properties support WAL or remove --upsert-keys. Error: {error_detail}",
+                        response_data=response,
+                    )
+                else:
+                    raise QuestDBAPIError(
+                        f"Failed to create temporary table: {error_detail}",
+                        response_data=response,
+                    )
             logger.info(f"Successfully created temporary table '{temp_table_name}'.")
             temp_table_created = True
-        except QuestDBError as create_err:
+        except (
+            QuestDBError,
+            ValueError,
+        ) as create_err:  # Catch ValueError from validation
             logger.error(
                 f"Error creating temporary table '{temp_table_name}': {create_err}"
             )
@@ -1884,6 +1916,8 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
             temp_table_created = False  # Mark temp table as successfully renamed/gone
             # --- 6. Success Reporting ---
             success_message = f"Successfully created/replaced table '{target_table}'."
+            if args.upsert_keys:
+                success_message += f" DEDUP enabled with keys: {args.upsert_keys}."
             if backup_created:
                 success_message += f" Original table backed up as '{backup_name}'."
             elif original_dropped_no_backup:
@@ -1896,6 +1930,7 @@ def handle_create_or_replace_table_from_query(args, client: QuestDBClient):
                         "status": "OK",
                         "message": success_message,
                         "target_table": target_table,
+                        "upsert_keys_set": args.upsert_keys,
                         "backup_table": backup_name if backup_created else None,
                         "original_dropped_no_backup": original_dropped_no_backup,
                     },
@@ -2430,9 +2465,7 @@ def _add_parser_global(parser: argparse.ArgumentParser):
     parser.add_argument(
         "-H", "--host", default=None, help="QuestDB server host."
     )  # Default handled by client init
-    parser.add_argument(
-        "--port", type=int, default=None, help="QuestDB REST API port."
-    )
+    parser.add_argument("--port", type=int, default=None, help="QuestDB REST API port.")
     parser.add_argument(
         "-u", "--user", default=None, help="Username for basic authentication."
     )
@@ -2912,7 +2945,16 @@ def _add_parser_cor(subparsers: argparse._SubParsersAction):
     )
     create_opts_group.add_argument(
         "-t", "--timestamp", help="Designated timestamp column name for the new table."
-    )  # Allow timeout for underlying DDL/query
+    )
+    # NEW: Upsert keys option
+    create_opts_group.add_argument(
+        "-k",
+        "--upsert-keys",
+        nargs="+",
+        metavar="COLUMN",
+        help="List of column names to use as UPSERT KEYS when creating the new table. Must include the designated timestamp (if specified via -t). Requires WAL.",
+    )
+    # Allow timeout for underlying DDL/query
     parser_cor.add_argument(
         "--statement-timeout",
         type=int,

@@ -149,6 +149,7 @@ $ qdb-cli rename trips taxi_trips_feb_2018
     - [Advanced Scripting](#advanced-scripting)
     - [Drop all backup tables with UUID4 in the name](#drop-all-backup-tables-with-uuid4-in-the-name)
     - [Piping query or table names from stdin](#piping-query-or-table-names-from-stdin)
+    - [Change partitioning strategy to YEAR for existing table](#change-partitioning-strategy-to-year-for-existing-table)
   - [PyPI packages and installation](#pypi-packages-and-installation)
   - [The Python API](#the-python-api)
   - [Screenshots](#screenshots)
@@ -347,6 +348,8 @@ New Table Creation Options:
                         Partitioning strategy for the new table.
   -t TIMESTAMP, --timestamp TIMESTAMP
                         Designated timestamp column name for the new table.
+  -k COLUMN [COLUMN ...], --upsert-keys COLUMN [COLUMN ...]
+                        List of column names to use as UPSERT KEYS when creating the new table. Must include the designated timestamp (if specified via -t). Requires WAL.
 ```
 
 ```plain
@@ -676,6 +679,114 @@ DEDUP UPSERT KEYS(timestamp);
 
 -- ...
 ```
+
+
+### Change partitioning strategy to YEAR for existing table
+
+```plain
+qdbs cme_liq_ba_6S
+CREATE TABLE 'cme_liq_ba_6S' ( 
+	MP DOUBLE,
+	LVL1B DOUBLE,
+	LVL1A DOUBLE,
+	LVL2B DOUBLE,
+	LVL2A DOUBLE,
+	LVL3B DOUBLE,
+	LVL3A DOUBLE,
+	LVL4B DOUBLE,
+	LVL10B DOUBLE,
+	LVL10A DOUBLE,
+	CT VARCHAR,
+	LVL4A DOUBLE,
+	LVL5B DOUBLE,
+	LVL5A DOUBLE,
+	LVL6B DOUBLE,
+	LVL6A DOUBLE,
+	LVL7B DOUBLE,
+	LVL7A DOUBLE,
+	LVL8B DOUBLE,
+	LVL8A DOUBLE,
+	LVL9B DOUBLE,
+	WT LONG,
+	LVL9A DOUBLE,
+	timestamp TIMESTAMP
+) timestamp(timestamp) PARTITION BY DAY WAL
+WITH maxUncommittedRows=500000, o3MaxLag=600000000us
+DEDUP UPSERT KEYS(timestamp);
+❯ qdbr cme_liq_ba_6S -q cme_liq_ba_6S -k timestamp -P YEAR
+WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
+WARNING: Query: cme_liq_ba_6S
+WARNING: QuestDB API Error: HTTP 400: partitioning is possible only on tables with designated timestamps
+WARNING: Response Body: {"query": "CREATE TABLE __qdb_cli_temp_cme_liq_ba_6S_683ce6ae_9c45_4bd1_836a_b1184075dea2 AS (cme_liq_ba_6S) PARTITION BY YEAR DEDUP UPSERT KEYS(timestamp);", "error": "partitioning is possible only on tables with designated timestamps", "position": 111}
+ERROR: Error creating temporary table '__qdb_cli_temp_cme_liq_ba_6S_683ce6ae_9c45_4bd1_836a_b1184075dea2': HTTP 400: HTTP 400: partitioning is possible only on tables with designated timestamps
+[1]    64741 exit 1     command questdb-cli cor cme_liq_ba_6S -q cme_liq_ba_6S -k timestamp -P YEAR
+❯ qdbr cme_liq_ba_6S -q cme_liq_ba_6S -k timestamp -P YEAR -t timestamp
+WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
+WARNING: Query: cme_liq_ba_6S
+{
+  "status": "OK",
+  "message": "Successfully created/replaced table 'cme_liq_ba_6S'. DEDUP enabled with keys: ['timestamp']. Original table backed up as 'qdb_cli_backup_cme_liq_ba_6S_dd70f217_4931_428f_8d84_3fa6003fbe4c'.",
+  "target_table": "cme_liq_ba_6S",
+  "upsert_keys_set": [
+    "timestamp"
+  ],
+  "backup_table": "qdb_cli_backup_cme_liq_ba_6S_dd70f217_4931_428f_8d84_3fa6003fbe4c",
+  "original_dropped_no_backup": false
+}
+❯ qdbs cme_liq_ba_6S
+CREATE TABLE 'cme_liq_ba_6S' ( 
+	MP DOUBLE,
+	LVL1B DOUBLE,
+	LVL1A DOUBLE,
+	LVL2B DOUBLE,
+	LVL2A DOUBLE,
+	LVL3B DOUBLE,
+	LVL3A DOUBLE,
+	LVL4B DOUBLE,
+	LVL10B DOUBLE,
+	LVL10A DOUBLE,
+	CT VARCHAR,
+	LVL4A DOUBLE,
+	LVL5B DOUBLE,
+	LVL5A DOUBLE,
+	LVL6B DOUBLE,
+	LVL6A DOUBLE,
+	LVL7B DOUBLE,
+	LVL7A DOUBLE,
+	LVL8B DOUBLE,
+	LVL8A DOUBLE,
+	LVL9B DOUBLE,
+	WT LONG,
+	LVL9A DOUBLE,
+	timestamp TIMESTAMP
+) timestamp(timestamp) PARTITION BY YEAR WAL
+WITH maxUncommittedRows=500000, o3MaxLag=600000000us
+DEDUP UPSERT KEYS(timestamp);
+```
+
+
+<!-- ### Batch change partitioning strategy and enable deduplication with `xargs`
+
+Change partition to `BY YEAR`:
+
+```plain
+qdb-table-names cme_liq | xargs -I{} qdb-cli cor -q {} {} -t timestamp -P YEAR
+WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
+WARNING: Query: cme_liq_ba_LE
+WARNING: QuestDB API Error: HTTP 400: unexpected token [_13b54dbf_efff_4ab8_93b8_5c3cc368cccb]
+WARNING: Response Body: {"query": "CREATE TABLE __qdb_cli_temp_cme_liq_ba_LE\r_13b54dbf_efff_4ab8_93b8_5c3cc368cccb AS (cme_liq_ba_LE) TIMESTAMP(timestamp) PARTITION BY YEAR;", "error": "unexpected token [_13b54dbf_efff_4ab8_93b8_5c3cc368cccb]", "position": 42}
+_13b54dbf_efff_4ab8_93b8_5c3cc368cccb': HTTP 400: HTTP 400: unexpected token [_13b54dbf_efff_4ab8_93b8_5c3cc368cccb]
+WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
+WARNING: Query: cme_liq_ba_HG
+WARNING: QuestDB API Error: HTTP 400: unexpected token [_2f9a5c01_0e01_4d8e_9be8_f33bfc4e3c23]
+WARNING: Response Body: {"query": "CREATE TABLE __qdb_cli_temp_cme_liq_ba_HG\r_2f9a5c01_0e01_4d8e_9be8_f33bfc4e3c23 AS (cme_liq_ba_HG) TIMESTAMP(timestamp) PARTITION BY YEAR;", "error": "unexpected token [_2f9a5c01_0e01_4d8e_9be8_f33bfc4e3c23]", "position": 42}
+...
+```
+
+Dedupe all tables by just `timestamp` col: -->
+
+
+
 
 ## PyPI packages and installation
 
