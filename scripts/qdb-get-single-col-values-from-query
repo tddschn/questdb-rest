@@ -49,4 +49,5 @@ query="$*"
 # Execute the query, strip header row and quotes, then copy to clipboard
 qdb-cli exp "$query" |
     tail -n +2 |
-    tr -d '"'
+    tr -d '"' | # strip quotes
+    tr -d '\r'
