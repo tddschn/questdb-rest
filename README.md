@@ -536,6 +536,12 @@ For convenience, I included a bash script `qdb-drop-tables-by-regex` and `qdb-im
 curl 'https://raw.githubusercontent.com/your/test.csv' | qdb-imp-from-stdin -n your_table_name
 ```
 
+Or use the more general purpose version:
+
+```bash
+qdb-table-names test_table_ | qdb-cli drop
+```
+
 ### Drop all backup tables with UUID4 in the name
 
 
