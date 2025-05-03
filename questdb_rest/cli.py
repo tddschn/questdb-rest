@@ -43,6 +43,7 @@ from questdb_rest import (
     QuestDBConnectionError,
     QuestDBAPIError,
     __version__,
+    CLI_EPILOG,
 )
 
 # --- Configuration ---
@@ -3102,7 +3103,7 @@ def get_args():
         description="QuestDB REST API Command Line Interface.\nLogs to stderr, outputs data to stdout.\n\nUses QuestDB REST API via questdb_rest library.",
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
-        epilog="This CLI can also be used as a Python library.\n\nLinks:\n- Write up and demo: https://teddysc.me/blog/questdb-rest\n- Interactive QuestDB Shell: https://teddysc.me/blog/rlwrap-questdb-shell\n- GitHub: https://github.com/tddschn/questdb-rest\n- PyPI: https://pypi.org/project/questdb-rest/",
+        epilog="This CLI can also be used as a Python library.\n\nLinks:\n- Write-up and demo: https://teddysc.me/blog/questdb-rest\n- Interactive QuestDB Shell: https://teddysc.me/blog/rlwrap-questdb-shell\n- GitHub: https://github.com/tddschn/questdb-rest\n- PyPI: https://pypi.org/project/questdb-rest/",
     )
     parser.add_argument(
         "-h",
@@ -3523,7 +3524,7 @@ def build_parser():
         description="QuestDB REST API Command Line Interface.\nLogs to stderr, outputs data to stdout.\n\nUses QuestDB REST API via questdb_rest library.",
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
-        epilog="This CLI can also be used as a Python library.\n\nLinks:\n- Write up and demo: https://teddysc.me/blog/questdb-rest\n- Interactive QuestDB Shell: https://teddysc.me/blog/rlwrap-questdb-shell\n- GitHub: https://github.com/tddschn/questdb-rest\n- PyPI: https://pypi.org/project/questdb-rest/",
+        epilog=CLI_EPILOG,
     )
     parser.add_argument(
         "-h",

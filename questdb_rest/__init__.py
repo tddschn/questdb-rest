@@ -5,7 +5,28 @@ import logging
 from urllib.parse import urlencode, urljoin
 from typing import Optional, Dict, Any, Union, IO, Tuple
 
+# --------------------
+# consts
+# --------------------
+
 __version__ = "3.4.0"
+CLI_EPILOG = """This CLI can also be used as a Python library.
+
+Links:
+- Write-up and demo: https://teddysc.me/blog/questdb-rest
+- Interactive QuestDB Shell: https://teddysc.me/blog/rlwrap-questdb-shell
+- GitHub: https://github.com/tddschn/questdb-rest
+- PyPI: https://pypi.org/project/questdb-rest/
+
+Enable shell completion with this command:
+    eval "$(uvx --from argcomplete register-python-argcomplete qdb-cli)"
+"""
+
+
+# --------------------
+# logger
+# --------------------
+
 logger = logging.getLogger(__name__)
 
 # --- Custom Exceptions ---
