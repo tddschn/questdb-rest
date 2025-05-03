@@ -770,6 +770,10 @@ CREATE TABLE 'cme_liq_ba_6S' (
 ) timestamp(timestamp) PARTITION BY YEAR WAL
 WITH maxUncommittedRows=500000, o3MaxLag=600000000us
 DEDUP UPSERT KEYS(timestamp);
+
+# original table is backed up
+❯ qdb-table-names --uuid
+qdb_cli_backup_cme_liq_ba_6S_dd70f217_4931_428f_8d84_3fa6003fbe4c
 ```
 
 
