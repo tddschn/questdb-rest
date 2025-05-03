@@ -23,6 +23,8 @@ from typing import Callable, Tuple
 import os  # ensure os is imported
 import re
 
+import argcomplete
+
 # Import the client and exceptions from the library
 from questdb_rest import (
     QuestDBClient,
@@ -457,10 +459,8 @@ def simulate_dedupe(args, table_name, index, total):
     elif action == "check":
         logger.info(
             "[DRY-RUN]   Simulating check result based on assumed initial state."
-        )
-        simulated_result["deduplication_enabled"] = (
-            simulated_dedup_enabled  # Will be None if simulated_dedup_enabled is False
-        )
+        )  # Will be None if simulated_dedup_enabled is False
+        simulated_result["deduplication_enabled"] = simulated_dedup_enabled
         simulated_result["designated_timestamp"] = simulated_ts
         simulated_result["upsert_keys"] = simulated_keys
         simulated_result["message"] = (
@@ -3179,8 +3179,65 @@ def get_args():
 
 def main():
     """Main entry point for the CLI."""
-    args = get_args()
-    # Set logging level based on args
+    # Build the parser first
+    parser = build_parser()
+    # --- Enable argcomplete ---
+    # Call this *before* parsing arguments
+    argcomplete.autocomplete(parser)
+    # Now parse the arguments
+    try:
+        args = parser.parse_args()
+        # Add requires_client default if not set by a specific command (like gen-config)
+        if not hasattr(args, "requires_client"):
+            args.requires_client = True
+    except SystemExit as e:  # Catch argparse errors specifically
+        # Argparse already prints help/errors, just exit
+        sys.exit(e.code if e.code is not None else 1)
+    except Exception as e:
+        parser.print_usage(sys.stderr)
+        logger.error(f"Argument parsing error: {e}")
+        sys.exit(2)  # Use exit code 2 for CLI usage errors
+    # --- Post-parsing validation ---
+    # (Moved from the original get_args function)
+    multi_table_commands = ["drop", "chk", "schema", "dedupe"]
+    if args.command in multi_table_commands:
+        has_positional_args = bool(getattr(args, "table_names", None))
+        has_file_arg = bool(getattr(args, "file", None))
+        is_stdin_piped = not sys.stdin.isatty()
+        input_sources = sum([has_positional_args, has_file_arg, is_stdin_piped])
+        if input_sources > 1:
+            parser.error(
+                f"For '{args.command}', provide table names via positional arguments, --file, OR stdin, not multiple."
+            )
+        if input_sources == 0:
+            # If no input is provided via args, file, or stdin, it's an error
+            parser.error(
+                f"For '{args.command}', table names must be provided via positional arguments, --file, or stdin."
+            )
+        # Specific validation for file vs positional args
+        if has_positional_args and has_file_arg:
+            parser.error(
+                f"argument -f/--file: not allowed with positional table name arguments for command '{args.command}'"
+            )
+    # Set default action for dedupe if none specified
+    if args.command == "dedupe":
+        if not (args.enable or args.disable or args.check):
+            args.check = True  # Default to check
+        # Validate --upsert-keys usage
+        if args.enable and (not args.upsert_keys):
+            parser.error("argument --enable: requires --upsert-keys to be set.")
+        if (args.disable or args.check) and args.upsert_keys:
+            parser.error("argument --upsert-keys: only allowed when using --enable.")
+    # Validation for exec --create-table
+    if args.command == "exec":
+        if args.create_table and (not args.new_table_name):
+            parser.error("--new-table-name is required when using --create-table.")
+    # Validation for rename old == new
+    if args.command == "rename":
+        if args.old_table_name == args.new_table_name:
+            parser.error("Old and new table names cannot be the same.")
+    # Validation for cor query input (check happens in handler now)
+    # --- Set logging level based on args ---
     log_level = logging.WARNING
     if args.info:
         log_level = logging.INFO
@@ -3266,10 +3323,7 @@ def main():
             except (EOFError, KeyboardInterrupt):
                 logger.info("\nOperation cancelled during password input.")
                 sys.exit(130)
-    # --- Validate Command Specific Args ---
-    # Validation is now performed within get_args() where parser is available,
-    # or can be moved to specific handler functions if preferred.
-    # Keeping some basic validation here for demonstration if needed.
+    # --- Further Argument Validation (Moved from old get_args) ---
     if args.command == "imp":
         if args.name_func == "add_prefix" and (not args.name_func_prefix):
             logger.debug(
@@ -3284,13 +3338,6 @@ def main():
             # This warning is now also handled inside handle_imp for clarity per file
             pass
     elif args.command == "exec":
-        # Check if create-table is used without new-table-name
-        if args.create_table and (not args.new_table_name):
-            # This validation should ideally be in get_args or using argparse logic
-            logger.error(
-                "--new-table-name is required when using --create-table. Exiting."
-            )
-            sys.exit(2)
         # Check if query source is missing (stdin check happens in handler)
         if (
             not args.query
@@ -3301,22 +3348,6 @@ def main():
             # This validation should ideally be in get_args or using argparse logic
             logger.error(
                 "No SQL query provided via --query, --file, --get-query-from-python-module, or stdin. Exiting."
-            )
-            sys.exit(2)
-    elif args.command == "rename":
-        if args.old_table_name == args.new_table_name:
-            # This validation should ideally be in get_args or using argparse logic
-            logger.error("Old and new table names cannot be the same. Exiting.")
-            sys.exit(2)
-    elif args.command == "dedupe":  # New validation for dedupe
-        if args.enable and (not args.upsert_keys):
-            # This validation should ideally be in get_args or using argparse logic
-            logger.error("--upsert-keys are required when using --enable. Exiting.")
-            sys.exit(2)
-        if (args.disable or args.check) and args.upsert_keys:
-            # This validation should ideally be in get_args or using argparse logic
-            logger.error(
-                "--upsert-keys should only be provided with --enable. Exiting."
             )
             sys.exit(2)
     # --- Instantiate Client (if needed and not dry run) ---
@@ -3473,3 +3504,38 @@ if __name__ == "__main__":
         print(f"An unexpected error occurred at the top level: {e}", file=sys.stderr)
         traceback.print_exc()  # Print traceback for unexpected top-level errors
         sys.exit(1)
+
+
+def build_parser():
+    """Builds the argument parser."""
+    parser = argparse.ArgumentParser(
+        description="QuestDB REST API Command Line Interface.\nLogs to stderr, outputs data to stdout.\n\nUses QuestDB REST API via questdb_rest library.",
+        formatter_class=argparse.RawTextHelpFormatter,
+        add_help=False,
+        epilog="This CLI can also be used as a Python library.\n\nLinks:\n- Write up and demo: https://teddysc.me/blog/questdb-rest\n- Interactive QuestDB Shell: https://teddysc.me/blog/rlwrap-questdb-shell\n- GitHub: https://github.com/tddschn/questdb-rest\n- PyPI: https://pypi.org/project/questdb-rest/",
+    )
+    parser.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help="Show this help message and exit.",
+    )
+    # Add global arguments
+    _add_parser_global(parser)
+    # Add subparsers
+    subparsers = parser.add_subparsers(
+        dest="command", required=True, help="Available sub-commands"
+    )
+    # Add subcommand arguments
+    _add_parser_imp(subparsers)
+    _add_parser_exec(subparsers)
+    _add_parser_exp(subparsers)
+    _add_parser_chk(subparsers)
+    _add_parser_schema(subparsers)
+    _add_parser_rename(subparsers)
+    _add_parser_cor(subparsers)
+    _add_parser_drop(subparsers)
+    _add_parser_dedupe(subparsers)
+    _add_parser_gen_config(subparsers)
+    return parser
