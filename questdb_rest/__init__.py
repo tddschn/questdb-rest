@@ -5,7 +5,7 @@ import logging
 from urllib.parse import urlencode, urljoin
 from typing import Optional, Dict, Any, Union, IO, Tuple
 
-__version__ = "3.1.7"
+__version__ = "3.1.8"
 logger = logging.getLogger(__name__)
 
 # --- Custom Exceptions ---
