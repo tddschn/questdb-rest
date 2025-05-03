@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+
+# Interactive selection of a QuestDB table and column, then run qdb-canned-queries.
+
+# Prompt for table name
+TABLE=$(qdb-table-names | fzf --prompt="Select table> ") || exit 1
+
+# Prompt for column name
+COL=$(qdb-cols --name-only "$TABLE" | fzf --prompt="Select column from '$TABLE'> ") || exit 1
+
+# Execute the canned query script with the selections
+qdb-canned-queries "$TABLE" "$COL"
