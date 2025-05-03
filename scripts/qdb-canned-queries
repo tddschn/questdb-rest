@@ -3,15 +3,18 @@
 show_help() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS] <table_name> [<col_name>]
-Run a qdb-cli export and clean up the output.
+Run a canned QuestDB query and clean up the output.
 
 Modes (mutually exclusive):
   (default)       Count mode:
                   SELECT count() FROM "<table_name>";
+                  → uses qdb-cli exp and strips header/quotes
   -d, --distinct  Distinct mode:
                   SELECT distinct ("<col_name>") FROM "<table_name>";
+                  → uses qdb-cli exp and strips header/quotes
   -c, --count     Distinct count mode:
                   SELECT distinct ("<col_name>"), count() FROM "<table_name>";
+                  → uses qdb-cli exec --psql (no post‐processing)
 
 Options:
   -n, --dry-run   Show the command that would be run, but do not execute it.
@@ -21,13 +24,12 @@ Options:
 Examples:
   $(basename "$0") cme_liq_ba_ES
   $(basename "$0") -d cme_liq_ba_ES CT
-  $(basename "$0") --count cme_liq_ba_ES CT
-  $(basename "$0") -n cme_liq_ba_ES
-  $(basename "$0") -v cme_liq_ba_ES
+  $(basename "$0") -c cme_liq_ba_ES CT
+  $(basename "$0") -n -c cme_liq_ba_ES CT
 EOF
 }
 
-# Default settings
+# Defaults
 MODE="count"
 DRY_RUN=0
 VERBOSE=0
@@ -55,22 +57,20 @@ while [[ $# -gt 0 ]]; do
         show_help
         exit 0
         ;;
-    --) # end of options
+    --)
         shift
         break
         ;;
-    -*) # unknown option
+    -*)
         echo "Unknown option: $1" >&2
         show_help
         exit 1
         ;;
-    *) # first non-flag argument
-        break
-        ;;
+    *) break ;;
     esac
 done
 
-# Positional arguments
+# Positional args
 TABLE="$1"
 COL="$2"
 
@@ -80,7 +80,7 @@ if [[ -z "$TABLE" ]]; then
     exit 1
 fi
 
-# Build SQL based on mode
+# Build the SQL
 case "$MODE" in
 count)
     SQL="select count() from \"${TABLE}\";"
@@ -103,22 +103,27 @@ distinct_count)
     ;;
 esac
 
-# Compose the command string
-CMD_STR="qdb-cli exp \"${SQL}\" | tail -n +2 | tr -d '\"' | tr -d '\r'"
+# Prepare the command
+if [[ "$MODE" == "distinct_count" ]]; then
+    CMD_STR="qdb-cli exec --psql -q \"${SQL}\""
+else
+    CMD_STR="qdb-cli exp \"${SQL}\" | tail -n +2 | tr -d '\"' | tr -d '\r'"
+fi
 
-# Dry-run: show and exit
+# Dry run?
 if [[ $DRY_RUN -eq 1 ]]; then
     echo "Dry run: $CMD_STR"
     exit 0
 fi
 
-# Verbose: show before running
+# Verbose?
 if [[ $VERBOSE -eq 1 ]]; then
     echo "Running: $CMD_STR"
 fi
 
 # Execute
-qdb-cli exp "${SQL}" |
-    tail -n +2 |
-    tr -d '"' |
-    tr -d '\r'
+if [[ "$MODE" == "distinct_count" ]]; then
+    eval qdb-cli exec --psql -q "'${SQL}'"
+else
+    eval qdb-cli exp "'${SQL}'" \| tail -n +2 \| tr -d '"' \| tr -d '\r'
+fi
