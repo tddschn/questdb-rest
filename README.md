@@ -150,6 +150,7 @@ $ qdb-cli rename trips taxi_trips_feb_2018
     - [Drop all backup tables with UUID4 in the name](#drop-all-backup-tables-with-uuid4-in-the-name)
     - [Piping query or table names from stdin](#piping-query-or-table-names-from-stdin)
     - [Change partitioning strategy to YEAR for existing table](#change-partitioning-strategy-to-year-for-existing-table)
+    - [Batch change partitioning strategy and enable deduplication with `xargs`](#batch-change-partitioning-strategy-and-enable-deduplication-with-xargs)
   - [PyPI packages and installation](#pypi-packages-and-installation)
   - [The Python API](#the-python-api)
   - [Screenshots](#screenshots)
@@ -358,7 +359,7 @@ New Table Creation Options:
 
 qdb-cli --info cor equities_1 -q "equities_1 where ticker != 'PLTR'" -t timestamp -P WEEK
 INFO: Log level set to INFO
-INFO: Connecting to http://localhost:3900
+INFO: Connecting to http://localhost:9000
 INFO: Starting create-or-replace operation for table 'equities_1' using temp table '__qdb_cli_temp_equities_1_26b1ac1a_5853_4215_b9b0_aa9b872c1f7b'...
 WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
 WARNING: Query: equities_1 where ticker != 'PLTR'
@@ -782,25 +783,56 @@ qdb_cli_backup_cme_liq_ba_6S_dd70f217_4931_428f_8d84_3fa6003fbe4c
 ```
 
 
-<!-- ### Batch change partitioning strategy and enable deduplication with `xargs`
+### Batch change partitioning strategy and enable deduplication with `xargs`
 
 Change partition to `BY YEAR`:
 
 ```plain
-qdb-table-names cme_liq | xargs -I{} qdb-cli cor -q {} {} -t timestamp -P YEAR
-WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
-WARNING: Query: cme_liq_ba_LE
-WARNING: QuestDB API Error: HTTP 400: unexpected token [_13b54dbf_efff_4ab8_93b8_5c3cc368cccb]
-WARNING: Response Body: {"query": "CREATE TABLE __qdb_cli_temp_cme_liq_ba_LE\r_13b54dbf_efff_4ab8_93b8_5c3cc368cccb AS (cme_liq_ba_LE) TIMESTAMP(timestamp) PARTITION BY YEAR;", "error": "unexpected token [_13b54dbf_efff_4ab8_93b8_5c3cc368cccb]", "position": 42}
-_13b54dbf_efff_4ab8_93b8_5c3cc368cccb': HTTP 400: HTTP 400: unexpected token [_13b54dbf_efff_4ab8_93b8_5c3cc368cccb]
-WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
-WARNING: Query: cme_liq_ba_HG
-WARNING: QuestDB API Error: HTTP 400: unexpected token [_2f9a5c01_0e01_4d8e_9be8_f33bfc4e3c23]
-WARNING: Response Body: {"query": "CREATE TABLE __qdb_cli_temp_cme_liq_ba_HG\r_2f9a5c01_0e01_4d8e_9be8_f33bfc4e3c23 AS (cme_liq_ba_HG) TIMESTAMP(timestamp) PARTITION BY YEAR;", "error": "unexpected token [_2f9a5c01_0e01_4d8e_9be8_f33bfc4e3c23]", "position": 42}
-...
-```
+$ qdb-table-names cme_liq | xargs -I{} qdb-cli --info cor -q {} {} -t timestamp -P YEAR --no-backup-original-table
 
-Dedupe all tables by just `timestamp` col: -->
+INFO: Log level set to INFO
+INFO: Connecting to http://localhost:9000
+INFO: Starting create-or-replace operation for table 'cme_liq_ba_ZF' using temp table '__qdb_cli_temp_cme_liq_ba_ZF_b802072f_3d4b_40bb_9661_beae1838e3f5'...
+WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
+WARNING: Query: cme_liq_ba_ZF
+INFO: Using query from query string for table creation.
+INFO: Creating temporary table '__qdb_cli_temp_cme_liq_ba_ZF_b802072f_3d4b_40bb_9661_beae1838e3f5' from query...
+INFO: Successfully created temporary table '__qdb_cli_temp_cme_liq_ba_ZF_b802072f_3d4b_40bb_9661_beae1838e3f5'.
+INFO: Checking if target table 'cme_liq_ba_ZF' exists...
+INFO: --no-backup-original-table specified. Dropping original table 'cme_liq_ba_ZF'...
+INFO: Successfully dropped original table 'cme_liq_ba_ZF'.
+INFO: Renaming temporary table '__qdb_cli_temp_cme_liq_ba_ZF_b802072f_3d4b_40bb_9661_beae1838e3f5' to target table 'cme_liq_ba_ZF'...
+INFO: Successfully renamed temporary table '__qdb_cli_temp_cme_liq_ba_ZF_b802072f_3d4b_40bb_9661_beae1838e3f5' to 'cme_liq_ba_ZF'.
+{
+  "status": "OK",
+  "message": "Successfully created/replaced table 'cme_liq_ba_ZF'. Original table was dropped (no backup).",
+  "target_table": "cme_liq_ba_ZF",
+  "upsert_keys_set": null,
+  "backup_table": null,
+  "original_dropped_no_backup": true
+}
+INFO: Log level set to INFO
+INFO: Connecting to http://localhost:9000
+INFO: Starting create-or-replace operation for table 'cme_liq_ba_ZT' using temp table '__qdb_cli_temp_cme_liq_ba_ZT_e1827495_381a_4029_a744_aa3982a85fe6'...
+WARNING: Input query from query string does not start with SELECT. Assuming it's valid QuestDB shorthand.
+WARNING: Query: cme_liq_ba_ZT
+INFO: Using query from query string for table creation.
+INFO: Creating temporary table '__qdb_cli_temp_cme_liq_ba_ZT_e1827495_381a_4029_a744_aa3982a85fe6' from query...
+INFO: Successfully created temporary table '__qdb_cli_temp_cme_liq_ba_ZT_e1827495_381a_4029_a744_aa3982a85fe6'.
+INFO: Checking if target table 'cme_liq_ba_ZT' exists...
+INFO: --no-backup-original-table specified. Dropping original table 'cme_liq_ba_ZT'...
+INFO: Successfully dropped original table 'cme_liq_ba_ZT'.
+INFO: Renaming temporary table '__qdb_cli_temp_cme_liq_ba_ZT_e1827495_381a_4029_a744_aa3982a85fe6' to target table 'cme_liq_ba_ZT'...
+INFO: Successfully renamed temporary table '__qdb_cli_temp_cme_liq_ba_ZT_e1827495_381a_4029_a744_aa3982a85fe6' to 'cme_liq_ba_ZT'.
+{
+  "status": "OK",
+  "message": "Successfully created/replaced table 'cme_liq_ba_ZT'. Original table was dropped (no backup).",
+  "target_table": "cme_liq_ba_ZT",
+  "upsert_keys_set": null,
+  "backup_table": null,
+  "original_dropped_no_backup": true
+}
+```
 
 
 
