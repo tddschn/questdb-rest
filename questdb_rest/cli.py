@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+# PYTHON_ARGCOMPLETE_OK
+
+# --------------------
+# legacy uv run header
+# --------------------
+
 #!/usr/bin/env uv run
 # /// script
 # requires-python = '>=3.11'
@@ -10,6 +16,11 @@
 #     "./questdb_rest.py" # Include the library file as a dependency
 # ]
 # ///
+
+# --------------------
+# imports
+# --------------------
+
 import uuid
 import argparse
 import html
