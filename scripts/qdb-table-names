@@ -6,9 +6,9 @@ UUID_REGEX='[0-9a-f]{8}([-_][0-9a-f]{4}){3}[-_][0-9a-f]{12}'
 
 print_help() {
     cat <<EOF
-Usage: $(basename "$0") [-u|--uuid] [-U|--no-uuid] [-l|--min-length N] [-L|--max-length N] [regex]
+Usage: $(basename "$0") [OPTIONS] [regex]
 
-Get a list of table names from QuestDB.
+Get a list of table names or full table info from QuestDB.
 
 Options:
   -h, --help           Show this help message and exit
@@ -16,12 +16,14 @@ Options:
   -U, --no-uuid        Only tables NOT containing a UUID-4 in their name
   -l, --min-length N   Only tables with name length >= N
   -L, --max-length N   Only tables with name length <= N
+  -f, --full-cols      Show all columns from the 'tables' table in PSQL format.
+                       (Default: shows only table names, one per line)
 
 You may combine one UUID flag with length filters and/or an additional regex.
 -u and -U are mutually exclusive.
 
 Examples:
-  # list all table names
+  # list all table names (default)
   $(basename "$0")
 
   # list only tables containing a UUID-4
@@ -35,12 +37,16 @@ Examples:
 
   # combine regex, UUID, and length filters
   $(basename "$0") -u -l 10 equities_
+
+  # show full info for tables starting with 'trade'
+  $(basename "$0") -f trades_
 EOF
 }
 
 # Default flags and filters
 uuid_flag=false
 no_uuid_flag=false
+full_cols_flag=false # New flag default
 min_length=""
 max_length=""
 
@@ -57,6 +63,10 @@ while [[ $# -gt 0 ]]; do
         ;;
     -U | --no-uuid)
         no_uuid_flag=true
+        shift
+        ;;
+    -f | --full-cols) # New flag parsing
+        full_cols_flag=true
         shift
         ;;
     -l | --min-length)
@@ -128,11 +138,24 @@ else
     where_clause=""
 fi
 
-# Construct final query
-query="SELECT table_name FROM tables ${where_clause}"
+# Select columns based on the -f flag
+select_cols="table_name"
+if [[ "$full_cols_flag" == true ]]; then
+    select_cols="*"
+fi
 
-# Execute and clean up output
-qdb-cli exp "$query" |
-    tail -n +2 | # drop header row
-    tr -d '"' |  # strip quotes
-    tr -d '\r'
+# Construct final query
+query="SELECT ${select_cols} FROM tables ${where_clause}"
+
+# Prepare base command array
+CMD_ARRAY=(qdb-cli exec -q "$query")
+
+# Add options based on the -f flag
+if [[ "$full_cols_flag" == true ]]; then
+    CMD_ARRAY+=(--psql) # Add --psql for full columns
+else
+    CMD_ARRAY+=(-x table_name) # Extract only table_name by default
+fi
+
+# Execute the command
+"${CMD_ARRAY[@]}"
