@@ -9,9 +9,10 @@ print_help() {
 Usage: $(basename "$0") [OPTIONS] [regex]
 
 Get a list of table names or full table info from QuestDB, with filtering options.
+Options can be placed before or after the optional regex pattern.
 
 Filtering Options:
-  regex                Positional argument: Regex pattern to match table names (uses '~').
+  regex                Optional positional argument: Regex pattern to match table names (uses '~').
   -v, --inverse-match  Use inverse regex match ('!~') for the positional regex.
   -u, --uuid           Only tables containing a UUID-4 in their name.
   -U, --no-uuid        Only tables NOT containing a UUID-4 in their name. Mutually exclusive with -u.
@@ -47,25 +48,59 @@ Examples:
 
   # show full info for tables starting with 'trade', partitioned by DAY
   $(basename "$0") -f -P DAY trades_
+
+  # show full info for tables matching 'schwab' with length >= 10 (options after regex)
+  $(basename "$0") schwab -l 10 -f
+
+  # list tables matching 'schwab' that have no designated timestamp
+  $(basename "$0") schwab -T
 EOF
 }
 
 # --- Option Parsing ---
+# Separate options from potential positional arguments first
+declare -a options_array=()
+declare -a positional_args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -*) # It's an option or option with argument
+        options_array+=("$1")
+        # If the option expects an argument (check based on known options)
+        case "$1" in
+        -l | --min-length | -L | --max-length | -P | --partitionBy)
+            # Check if the next argument exists and doesn't start with '-'
+            if [[ -n "${2:-}" ]] && [[ ! "$2" =~ ^- ]]; then
+                options_array+=("$2")
+                shift # Consume the option's argument as well
+            fi
+            ;;
+        *) ;; # No argument expected for other flags
+        esac
+        ;;
+    *) # It's a positional argument
+        positional_args+=("$1")
+        ;;
+    esac
+    shift # Move to the next argument
+done
+
+# --- Process Options using getopts on the separated options array ---
 # Defaults
 uuid_flag=false
 no_uuid_flag=false
 full_cols_flag=false
 inverse_match_flag=false
 partition_by_filter=""
-ts_filter=""    # Can be "IS NOT NULL", "IS NULL", or ""
-dedup_filter="" # Can be "true", "false", or ""
+ts_filter=""
+dedup_filter=""
 min_length=""
 max_length=""
 
-# Use getopts for better option parsing
-# The colon after an option indicates it requires an argument (e.g., P:, l:, L:)
-# Leading colon tells getopts to handle errors silently (we'll check later)
-while getopts ":huUfvtdDl:L:P:" opt; do
+# Reset OPTIND for getopts processing on the new array
+OPTIND=1
+
+# ***** FIX: Added 'T' to the getopts option string *****
+while getopts ":huUfvtdDTl:L:P:" opt "${options_array[@]}"; do
     case ${opt} in
     h)
         print_help
@@ -76,35 +111,34 @@ while getopts ":huUfvtdDl:L:P:" opt; do
     f) full_cols_flag=true ;;
     v) inverse_match_flag=true ;;
     t)
-        if [[ -n "$ts_filter" ]]; then # Check for conflict with -T
-            echo "Error: Options -t (--has-designated-timestamp) and -T (--no-designated-timestamp) are mutually exclusive." >&2
+        if [[ -n "$ts_filter" ]]; then
+            echo "Error: Options -t and -T are mutually exclusive." >&2
             exit 1
         fi
         ts_filter="IS NOT NULL"
         ;;
-    T)
-        if [[ -n "$ts_filter" ]]; then # Check for conflict with -t
-            echo "Error: Options -t (--has-designated-timestamp) and -T (--no-designated-timestamp) are mutually exclusive." >&2
+    T) # Case for -T flag
+        if [[ -n "$ts_filter" ]]; then
+            echo "Error: Options -t and -T are mutually exclusive." >&2
             exit 1
         fi
         ts_filter="IS NULL"
         ;;
     d)
-        if [[ -n "$dedup_filter" ]]; then # Check for conflict with -D
-            echo "Error: Options -d (--dedup-enabled) and -D (--dedup-disabled) are mutually exclusive." >&2
+        if [[ -n "$dedup_filter" ]]; then
+            echo "Error: Options -d and -D are mutually exclusive." >&2
             exit 1
         fi
         dedup_filter="true"
         ;;
     D)
-        if [[ -n "$dedup_filter" ]]; then # Check for conflict with -d
-            echo "Error: Options -d (--dedup-enabled) and -D (--dedup-disabled) are mutually exclusive." >&2
+        if [[ -n "$dedup_filter" ]]; then
+            echo "Error: Options -d and -D are mutually exclusive." >&2
             exit 1
         fi
         dedup_filter="false"
         ;;
     l)
-        # Basic validation: check if it's a number? Optional.
         if ! [[ "$OPTARG" =~ ^[0-9]+$ ]]; then
             echo "Error: --min-length requires a non-negative integer." >&2
             exit 1
@@ -119,37 +153,38 @@ while getopts ":huUfvtdDl:L:P:" opt; do
         max_length="$OPTARG"
         ;;
     P) partition_by_filter="$OPTARG" ;;
-    \?) # Invalid option
-        echo "Invalid option: -$OPTARG" >&2
+    \?) # Invalid option found by getopts
+        echo "Invalid option detected near '$OPTARG' in [${options_array[*]}]" >&2
         print_help
         exit 1
         ;;
-    :) # Missing argument
-        echo "Option -$OPTARG requires an argument." >&2
+    :) # Missing argument detected by getopts
+        echo "Option near '$OPTARG' requires an argument." >&2
         print_help
         exit 1
         ;;
     esac
 done
-shift $((OPTIND - 1)) # Remove parsed options and args from $@
+
+# --- Process Positional Arguments ---
+regex=""
+if [[ ${#positional_args[@]} -gt 1 ]]; then
+    echo "Error: Too many positional arguments. Only one regex pattern is allowed." >&2
+    echo "Found: ${positional_args[@]}" >&2
+    print_help
+    exit 1
+elif [[ ${#positional_args[@]} -eq 1 ]]; then
+    regex="${positional_args[0]}"
+fi
 
 # --- Argument Validation ---
-# Enforce mutual exclusivity of UUID flags (again, belt-and-suspenders)
 if [[ "$uuid_flag" == true && "$no_uuid_flag" == true ]]; then
     echo "Error: options -u|--uuid and -U|--no-uuid are mutually exclusive." >&2
     exit 1
 fi
 
-# The first remaining argument (if any) is the positional regex
-regex="${1:-}"
-if [[ $# -gt 1 ]]; then
-    echo "Error: Too many positional arguments. Only one regex pattern is allowed." >&2
-    print_help
-    exit 1
-fi
-
 # --- Build WHERE Clause ---
-conds=()
+declare -a conds=() # Use declare -a for explicit array
 
 # Positional Regex Filter
 if [[ -n "$regex" ]]; then
@@ -172,9 +207,7 @@ fi
 # Partition By Filter
 if [[ -n "$partition_by_filter" ]]; then
     # Convert comma-separated list to SQL IN ('val1', 'val2') format
-    # Replace commas with ','
     sql_in_list=$(echo "$partition_by_filter" | sed "s/,/','/g")
-    # Add leading and trailing quotes
     sql_in_list="'${sql_in_list}'"
     conds+=("partitionBy IN (${sql_in_list})")
 fi
@@ -197,19 +230,15 @@ if [[ -n "$max_length" ]]; then
     conds+=("length(table_name) <= ${max_length}")
 fi
 
-# Assemble WHERE clause
-if ((${#conds[@]})); then
-    # Join conditions with ' AND '
-    where_clause="WHERE $(
-        IFS=' AND '
-        echo "${conds[*]}"
-    )"
-else
-    where_clause=""
+# Assemble WHERE clause using printf for robust joining with ' AND '
+where_clause=""
+if [[ ${#conds[@]} -gt 0 ]]; then
+    joined_conds=$(printf '%s AND ' "${conds[@]}") # Add " AND " after each element
+    joined_conds=${joined_conds% AND }             # Remove the trailing " AND "
+    where_clause="WHERE $joined_conds"
 fi
 
 # --- Construct and Execute Query ---
-# Select columns based on the -f flag
 select_cols="table_name"
 if [[ "$full_cols_flag" == true ]]; then
     select_cols="*"
@@ -219,13 +248,13 @@ fi
 query="SELECT ${select_cols} FROM tables ${where_clause}"
 
 # Prepare base command array
-CMD_ARRAY=(qdb-cli exec -q "$query")
+declare -a CMD_ARRAY=(qdb-cli exec -q "$query") # Use declare -a
 
 # Add output formatting options based on the -f flag
 if [[ "$full_cols_flag" == true ]]; then
-    CMD_ARRAY+=(--psql) # Add --psql for full columns
+    CMD_ARRAY+=(--psql)
 else
-    CMD_ARRAY+=(-x table_name) # Extract only table_name by default
+    CMD_ARRAY+=(-x table_name)
 fi
 
 # Execute the command
