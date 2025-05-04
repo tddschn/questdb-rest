@@ -30,6 +30,7 @@ gitingest:
 
 ging_:
 	gitingest_api_cli.py tddschn/questdb-rest
+	rg __version__ tddschn-questdb-rest.txt
 
 update-python-functions-from-copied-markdown:
 	update-python-functions-from-copied-markdown.sh questdb_rest/cli.py questdb_rest/__init__.py
