@@ -19,6 +19,11 @@ from typing import Dict, List, Tuple, Optional
 # Example: since 2020, no nulls
 # Example: since 2020, no nulls
 # Example: 4-16 bytes, no nulls
+# qdb-gen-random-data.py
+
+# Format: 'cli_type_name': (rnd_function_call, sql_data_type)
+# Updated date and timestamp to use fixed end values instead of now()
+# Kept binary as is, display issue might be separate.
 TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "boolean": ("rnd_boolean()", "BOOLEAN"),
     "byte": ("rnd_byte()", "BYTE"),
@@ -31,11 +36,14 @@ TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "string": ("rnd_str(5, 10, 0)", "STRING"),
     "symbol": ("rnd_symbol(4, 1, 5, 0)", "SYMBOL"),
     "varchar": ("rnd_varchar(5, 10, 0)", "VARCHAR"),
-    "date": ("rnd_date(to_date('2020-01-01', 'yyyy-MM-dd'), now(), 0)", "DATE"),
+    "date": (
+        "rnd_date(to_date('2020-01-01', 'yyyy-MM-dd'), to_date('2024-12-31', 'yyyy-MM-dd'), 0)",
+        "DATE",
+    ),  # Fixed end date
     "timestamp": (
-        "rnd_timestamp(to_timestamp('2020-01-01T00:00:00.000Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ'), now(), 0)",
+        "rnd_timestamp(to_timestamp('2020-01-01T00:00:00.000Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ'), to_timestamp('2024-12-31T23:59:59.999Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ'), 0)",
         "TIMESTAMP",
-    ),
+    ),  # Fixed end timestamp
     "long256": ("rnd_long256()", "LONG256"),
     "uuid": ("rnd_uuid4()", "UUID"),
     "ipv4": ("rnd_ipv4()", "IPV4"),
@@ -96,53 +104,6 @@ def run_qdb_cli(
     except Exception as e:
         print(f"An unexpected error occurred running qdb-cli: {e}", file=sys.stderr)
         sys.exit(1)
-
-
-def check_table_exists(table_name: str, info: bool = False) -> bool:
-    """Checks if a QuestDB table exists using `qdb-cli chk`."""
-    # Only print check message if info flag is set
-    if info:
-        print(f"+ Checking if table '{table_name}' exists...", file=sys.stderr)
-    # Pass the info flag down
-    result = run_qdb_cli(["chk", table_name], check=False, info=info)
-    if result.returncode == 0:
-        try:
-            chk_output = json.loads(result.stdout)
-            exists = chk_output.get("status") == "Exists"
-            # Only print result message if info flag is set
-            if info:
-                print(
-                    f"  Result: {('Exists' if exists else 'Does not exist')}",
-                    file=sys.stderr,
-                )
-            return exists
-        except json.JSONDecodeError:
-            print(
-                f"Warning: Could not parse JSON from 'qdb-cli chk {table_name}'. Assuming table does not exist.",
-                file=sys.stderr,
-            )
-            if info:  # Only print raw output if info requested
-                print(f"  Raw stdout: {result.stdout}", file=sys.stderr)
-            return False
-        except Exception as e:
-            print(
-                f"Warning: Error processing 'qdb-cli chk {table_name}' output: {e}. Assuming table does not exist.",
-                file=sys.stderr,
-            )
-            return False
-    elif (
-        result.returncode == 3
-    ):  # Specific exit code from `chk` if table does not exist
-        if info:
-            print("  Result: Does not exist (exit code 3)", file=sys.stderr)
-        return False
-    else:
-        # Other errors (connection, etc.)
-        print(
-            f"Warning: 'qdb-cli chk {table_name}' failed with exit code {result.returncode}. Assuming table does not exist.",
-            file=sys.stderr,
-        )
-        return False  # Treat other errors as "doesn't exist" for safety
 
 
 def build_select_list(types_to_generate: List[str]) -> List[str]:
@@ -245,7 +206,7 @@ def setup_arg_parser() -> argparse.ArgumentParser:
         help="Name of the target table. If provided, data will be inserted. If the table doesn't exist, it will be created first.",
     )
     parser.add_argument(
-        "-N", "--rows", type=int, required=True, help="Number of rows to generate."
+        "-N", "--rows", type=int, default=10, help="Number of rows to generate."
     )
     parser.add_argument(
         "-t",
@@ -288,6 +249,13 @@ def setup_arg_parser() -> argparse.ArgumentParser:
 
 
 # --- Main Execution ---
+from questdb_rest import (
+    QuestDBClient,
+    QuestDBError,
+    QuestDBConnectionError,
+    QuestDBAPIError,
+)
+import os
 
 
 def main():
@@ -310,14 +278,142 @@ def main():
     if not types_to_generate:
         print("Error: No data types selected to generate.", file=sys.stderr)
         sys.exit(1)
+    # --- Separate qdb-cli connection args from exec args ---
+    qdb_client_args_dict = {}
+    qdb_exec_extra_args = []
+    remainder = args.qdb_cli_args
+    # Simple parsing for known connection args
+    i = 0
+    while i < len(remainder):
+        arg = remainder[i]
+        # Check for args that take a value
+        if arg in (
+            "-H",
+            "--host",
+            "--port",
+            "-u",
+            "--user",
+            "-p",
+            "--password",
+            "--timeout",
+            "--scheme",
+            "--config",
+        ):
+            if i + 1 < len(remainder):
+                val = remainder[i + 1]
+                # Map CLI arg to QuestDBClient constructor arg name
+                if arg in ("-H", "--host"):
+                    qdb_client_args_dict["host"] = val
+                elif arg == "--port":
+                    qdb_client_args_dict["port"] = int(val)  # Client expects int
+                elif arg in ("-u", "--user"):
+                    qdb_client_args_dict["user"] = val
+                elif arg in ("-p", "--password"):
+                    qdb_client_args_dict["password"] = val
+                elif arg == "--timeout":
+                    qdb_client_args_dict["timeout"] = int(val)  # Client expects int
+                elif arg == "--scheme":
+                    qdb_client_args_dict["scheme"] = val
+                elif arg == "--config":
+                    qdb_client_args_dict["config_path"] = val  # Client uses config_path
+                i += 1  # Skip next arg (the value)
+            else:
+                # Option requires value but none provided, pass it to exec
+                qdb_exec_extra_args.append(arg)
+        # Check for flags
+        # Flags -i/-D (info/debug for qdb-cli itself) are handled by run_qdb_cli
+        # Flag -R (dry-run for qdb-cli itself) is handled by script's --dry-run
+        # BooleanOptionalAction --stop-on-error / --no-stop-on-error
+        elif arg in ("--stop-on-error", "--no-stop-on-error"):
+            qdb_exec_extra_args.append(arg)  # Pass to exec
+        elif arg.startswith("-"):  # Treat other flags as exec args
+            qdb_exec_extra_args.append(arg)
+        else:  # Treat non-flags as exec args (shouldn't happen with REMAINDER but be safe)
+            qdb_exec_extra_args.append(arg)
+        i += 1
     # --- Build SQL components ---
     select_list = build_select_list(types_to_generate)
+    # --- Instantiate Client (only if needed and not dry run) ---
+    client: Optional[QuestDBClient] = None
+    if args.name and (not args.dry_run):
+        try:
+            if "config_path" in qdb_client_args_dict:
+                config_path = qdb_client_args_dict.pop("config_path")
+                client = QuestDBClient.from_config_file(config_path)
+                if "host" in qdb_client_args_dict:
+                    client.base_url = client.base_url.replace(
+                        client.base_url.split("://")[1].split(":")[0],
+                        qdb_client_args_dict["host"],
+                    )
+                if "port" in qdb_client_args_dict:
+                    client.base_url = client.base_url.replace(
+                        f":{client.base_url.split(':')[-1].split('/')[0]}",
+                        f":{qdb_client_args_dict['port']}",
+                    )
+                if "user" in qdb_client_args_dict or "password" in qdb_client_args_dict:
+                    client.auth = (
+                        (
+                            qdb_client_args_dict.get(
+                                "user", client.auth[0] if client.auth else None
+                            ),
+                            qdb_client_args_dict.get(
+                                "password", client.auth[1] if client.auth else None
+                            ),
+                        )
+                        if qdb_client_args_dict.get("user")
+                        else None
+                    )
+                if "timeout" in qdb_client_args_dict:
+                    client.timeout = qdb_client_args_dict["timeout"]
+                if "scheme" in qdb_client_args_dict:
+                    # Use from_config_file if --config was passed
+                    # Apply other CLI args as overrides if present
+                    # Override with any other connection args from CLI
+                    # Basic host replace
+                    # Basic port replace
+                    client.base_url = (
+                        qdb_client_args_dict["scheme"]
+                        + "://"
+                        + client.base_url.split("://")[1]
+                    )
+            else:
+                # Standard init: uses explicit args > default config > defaults
+                client = QuestDBClient(**qdb_client_args_dict)
+            # Log connection details if info requested
+            if args.info and client:
+                log_host = client.base_url.split("://")[1].split(":")[0]
+                port_part = client.base_url.split(":")[-1]
+                log_port = (
+                    int(port_part.split("/")[0])
+                    if port_part.split("/")[0].isdigit()
+                    else QuestDBClient.DEFAULT_PORT
+                )
+                log_scheme = client.base_url.split("://")[0]
+                log_user_info = f" as user '{client.auth[0]}'" if client.auth else ""
+                print(
+                    f"i Client connected to {log_scheme}://{log_host}:{log_port}{log_user_info}",
+                    file=sys.stderr,
+                )
+        except (QuestDBError, ValueError, TypeError) as e:
+            print(f"Error: Failed to initialize QuestDB client: {e}", file=sys.stderr)
+            sys.exit(1)
+        except FileNotFoundError as e:
+            print(
+                f"Error: Config file specified via --config not found: {e}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        except Exception as e:  # Catch other potential init errors
+            print(
+                f"Error: An unexpected error occurred during client initialization: {e}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
     # --- Execution Logic ---
-    # Base command for exec, REMOVING qdb-cli global args (they are passed via qdb_cli_args)
-    qdb_exec_base_cmd = ["exec"] + args.qdb_cli_args
+    # Base command for exec, including any *non-connection* args passed
+    qdb_exec_base_cmd = ["exec"] + qdb_exec_extra_args
     if not args.name:
         # --- Mode: Print data to stdout ---
-        # Only print status if --info
         if args.info:
             print(
                 "i No table name specified (--name). Printing generated data to stdout.",
@@ -326,43 +422,65 @@ def main():
         select_query = (
             f"SELECT\n  {', '.join(select_list)}\nFROM long_sequence({args.rows});"
         )
-        # Prepend --psql for better formatting when printing
         qdb_cmd_args = qdb_exec_base_cmd + ["-q", select_query] + ["--psql"]
         if args.dry_run:
             print("\n--- Dry Run: Command to print data ---")
-            # Construct the full command including qdb-cli and --info if needed
             dry_run_full_cmd = ["qdb-cli"]
             if args.info:
                 dry_run_full_cmd.append("--info")
-            dry_run_full_cmd.extend(qdb_cmd_args)
+            # Include original connection args for dry-run clarity
+            dry_run_full_cmd.extend(args.qdb_cli_args)
+            # Use the actual command part built for exec
+            dry_run_full_cmd.extend(["exec", "-q", select_query, "--psql"])
             print(shlex.join(dry_run_full_cmd))
         else:
-            # Pass the args.info flag down
-            result = run_qdb_cli(qdb_cmd_args, info=args.info)
-            print(result.stdout, end="")  # Print query result to stdout
-            # Only print success message if --info
+            result = run_qdb_cli(
+                qdb_cmd_args, info=args.info
+            )  # Pass script's info flag
+            print(result.stdout, end="")
             if args.info:
                 print("\nData printed successfully.", file=sys.stderr)
     else:
         # --- Mode: Create/Insert into table ---
         table_name = args.name
-        # Only print status if --info
         if args.info:
             print(f"i Target table: '{table_name}'", file=sys.stderr)
         # 1. Check if table exists (unless dry run)
         exists = False
         if not args.dry_run:
-            exists = check_table_exists(table_name, info=args.info)  # Pass info flag
+            if not client:  # Should not happen if name is set, but check
+                print(
+                    "Error: Client not initialized, cannot check table existence.",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            if args.info:
+                print(
+                    f"+ Checking if table '{table_name}' exists using client...",
+                    file=sys.stderr,
+                )
+            try:
+                exists = client.table_exists(table_name)
+                if args.info:
+                    print(
+                        f"  Result: {('Exists' if exists else 'Does not exist')}",
+                        file=sys.stderr,
+                    )
+            except QuestDBError as e:
+                print(
+                    f"Warning: Failed to check table existence for '{table_name}': {e}. Assuming it does not exist.",
+                    file=sys.stderr,
+                )
+                exists = False  # Proceed assuming not exists on error
         # 2. Create table if it doesn't exist
         create_cmd_str = None
         if not exists:
-            # Only print status if --info
             if args.info:
                 print(
                     f"i Table '{table_name}' does not exist. Will attempt to create it.",
                     file=sys.stderr,
                 )
-            try:  # Pass info flag
+            try:  # Pass info flag here too
                 create_sql = build_create_statement(
                     table_name,
                     types_to_generate,
@@ -370,34 +488,38 @@ def main():
                     args.partitionBy,
                     info=args.info,
                 )
+                create_cmd_args = qdb_exec_base_cmd + ["-q", create_sql]
                 # Construct the full command for dry run display
                 create_full_cmd_dry_run = ["qdb-cli"]
                 if args.info:
                     create_full_cmd_dry_run.append("--info")
-                create_full_cmd_dry_run.extend(qdb_exec_base_cmd + ["-q", create_sql])
+                # Include original connection args
+                create_full_cmd_dry_run.extend(args.qdb_cli_args)
+                # Add the actual command part
+                create_full_cmd_dry_run.extend(["exec", "-q", create_sql])
                 create_cmd_str = shlex.join(create_full_cmd_dry_run)
                 if args.dry_run:
                     print("\n--- Dry Run: Command to CREATE table ---")
                     print(create_cmd_str)
                 else:
-                    # Only print status if --info
                     if args.info:
                         print(f"Creating table '{table_name}'...", file=sys.stderr)
-                    # Pass info flag
-                    run_qdb_cli(qdb_exec_base_cmd + ["-q", create_sql], info=args.info)
-                    # Only print status if --info
+                    run_qdb_cli(
+                        create_cmd_args, info=args.info
+                    )  # Pass script's info flag
                     if args.info:
                         print(
                             f"Table '{table_name}' created successfully.",
                             file=sys.stderr,
                         )
-            except SystemExit:  # Catch sys.exit from build_create_statement validation
-                sys.exit(1)  # Propagate exit
+            except SystemExit:
+                sys.exit(1)
             except Exception as e:
-                print(f"\nError building CREATE statement: {e}", file=sys.stderr)
+                print(
+                    f"\nError building/executing CREATE statement: {e}", file=sys.stderr
+                )
                 sys.exit(1)
         elif not args.dry_run:
-            # Only print status if --info
             if args.info:
                 print(
                     f"i Table '{table_name}' already exists. Proceeding to insert data.",
@@ -407,29 +529,28 @@ def main():
         insert_cmd_str = None
         try:
             insert_sql = build_insert_statement(table_name, select_list, args.rows)
+            insert_cmd_args = qdb_exec_base_cmd + ["-q", insert_sql]
             # Construct the full command for dry run display
             insert_full_cmd_dry_run = ["qdb-cli"]
             if args.info:
                 insert_full_cmd_dry_run.append("--info")
-            insert_full_cmd_dry_run.extend(qdb_exec_base_cmd + ["-q", insert_sql])
+            # Include original connection args
+            insert_full_cmd_dry_run.extend(args.qdb_cli_args)
+            # Add the actual command part
+            insert_full_cmd_dry_run.extend(["exec", "-q", insert_sql])
             insert_cmd_str = shlex.join(insert_full_cmd_dry_run)
             if args.dry_run:
                 print("\n--- Dry Run: Command to INSERT data ---")
                 print(insert_cmd_str)
-                # Also print the create command if it would have run
-                if not exists and create_cmd_str:
-                    if args.info:  # Only print extra message if info
-                        print("\n(Table would have been created first if not dry run)")
+                if not exists and create_cmd_str and args.info:
+                    print("\n(Table would have been created first if not dry run)")
             else:
-                # Only print status if --info
                 if args.info:
                     print(
                         f"Inserting {args.rows} rows into '{table_name}'...",
                         file=sys.stderr,
                     )
-                # Pass info flag
-                run_qdb_cli(qdb_exec_base_cmd + ["-q", insert_sql], info=args.info)
-                # Only print status if --info
+                run_qdb_cli(insert_cmd_args, info=args.info)  # Pass script's info flag
                 if args.info:
                     print(
                         f"Data inserted successfully into '{table_name}'.",
