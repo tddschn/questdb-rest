@@ -227,12 +227,16 @@ def build_sql_query(args: argparse.Namespace) -> str:
     for pattern in args.regex:
         # Basic escaping for single quotes in the pattern
         safe_regex = pattern.replace("'", "''")
+        if args.case_insensitive:
+            safe_regex = safe_regex.lower()
         # Use the correct column expression based on case sensitivity
         raw_sql_conditions.append(f"{table_name_expr} ~ '{safe_regex}'")
     # Inverse Regex Filters (args.inverse_regexes is now a list)
     for pattern in args.inverse_regexes:
         # Basic escaping for single quotes in the pattern
         safe_regex = pattern.replace("'", "''")
+        if args.case_insensitive:
+            safe_regex = safe_regex.lower()
         # Use the correct column expression based on case sensitivity
         raw_sql_conditions.append(f"{table_name_expr} !~ '{safe_regex}'")
     # UUID Filter (case insensitive is irrelevant for UUID format)
