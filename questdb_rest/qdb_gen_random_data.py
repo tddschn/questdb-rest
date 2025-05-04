@@ -28,6 +28,7 @@ from typing import Dict, List, Tuple, Optional
 # Simplified date literals
 # Use literal timestamp strings directly
 # Kept as is, display might be CLI issue
+# "geohash": ("rnd_geohash(30)", "GEOHASH"),
 TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "boolean": ("rnd_boolean()", "BOOLEAN"),
     "byte": ("rnd_byte()", "BYTE"),
@@ -49,7 +50,6 @@ TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "uuid": ("rnd_uuid4()", "UUID"),
     "ipv4": ("rnd_ipv4()", "IPV4"),
     "binary": ("rnd_bin()", "BINARY"),
-    # "geohash": ("rnd_geohash(30)", "GEOHASH"),
 }
 DEFAULT_TYPES = ["float"]
 # --- Helper Functions ---
@@ -250,6 +250,13 @@ def setup_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Pass the --info flag to underlying qdb-cli calls for verbose logging.",
     )
+    # New CSV flag
+    parser.add_argument(
+        "-c",
+        "--csv",
+        action="store_true",
+        help="Output data as CSV using 'qdb-cli exp' instead of '--psql' table format (only applicable when --name is not used).",
+    )
     parser.add_argument(
         "qdb_cli_args",
         nargs=argparse.REMAINDER,
@@ -306,7 +313,7 @@ def main():
         sys.exit(1)
     # --- Separate qdb-cli connection args from exec args ---
     qdb_client_args_dict = {}
-    qdb_exec_extra_args = []
+    qdb_exec_or_exp_extra_args = []  # Renamed to reflect potential exp usage
     remainder = args.qdb_cli_args
     # Simple parsing for known connection args
     i = 0
@@ -344,63 +351,56 @@ def main():
                     qdb_client_args_dict["config_path"] = val  # Client uses config_path
                 i += 1  # Skip next arg (the value)
             else:
-                # Option requires value but none provided, pass it to exec
-                qdb_exec_extra_args.append(arg)
+                # Option requires value but none provided, pass it to exec/exp
+                qdb_exec_or_exp_extra_args.append(arg)
         # Check for flags
         # Flags -i/-D (info/debug for qdb-cli itself) are handled by run_qdb_cli
         # Flag -R (dry-run for qdb-cli itself) is handled by script's --dry-run
         # BooleanOptionalAction --stop-on-error / --no-stop-on-error
         elif arg in ("--stop-on-error", "--no-stop-on-error"):
-            qdb_exec_extra_args.append(arg)  # Pass to exec
-        elif arg.startswith("-"):  # Treat other flags as exec args
-            qdb_exec_extra_args.append(arg)
-        else:  # Treat non-flags as exec args (shouldn't happen with REMAINDER but be safe)
-            qdb_exec_extra_args.append(arg)
+            qdb_exec_or_exp_extra_args.append(arg)  # Pass to exec/exp
+        elif arg.startswith("-"):  # Treat other flags as exec/exp args
+            qdb_exec_or_exp_extra_args.append(arg)
+        else:  # Treat non-flags as exec/exp args (shouldn't happen with REMAINDER but be safe)
+            qdb_exec_or_exp_extra_args.append(arg)
         i += 1
     # --- Build SQL components ---
     select_list = build_select_list(types_to_generate)
     # --- Instantiate Client (only if needed and not dry run) ---
     client: Optional[QuestDBClient] = None
+    # Client is needed if inserting (--name) OR if checking existence (also --name)
     if args.name and (not args.dry_run):
         try:
             if "config_path" in qdb_client_args_dict:
                 config_path = qdb_client_args_dict.pop("config_path")
                 client = QuestDBClient.from_config_file(config_path)
+                # Override loaded config with specific CLI connection args
                 if "host" in qdb_client_args_dict:
+                    # Basic host replace in base_url
+                    base_host = client.base_url.split("://")[1].split(":")[0]
                     client.base_url = client.base_url.replace(
-                        client.base_url.split("://")[1].split(":")[0],
-                        qdb_client_args_dict["host"],
+                        base_host, qdb_client_args_dict["host"], 1
                     )
                 if "port" in qdb_client_args_dict:
+                    # Basic port replace in base_url
+                    port_str = f":{client.base_url.split(':')[-1].split('/')[0]}"
                     client.base_url = client.base_url.replace(
-                        f":{client.base_url.split(':')[-1].split('/')[0]}",
-                        f":{qdb_client_args_dict['port']}",
+                        port_str, f":{qdb_client_args_dict['port']}", 1
                     )
                 if "user" in qdb_client_args_dict or "password" in qdb_client_args_dict:
-                    client.auth = (
-                        (
-                            qdb_client_args_dict.get(
-                                "user", client.auth[0] if client.auth else None
-                            ),
-                            qdb_client_args_dict.get(
-                                "password", client.auth[1] if client.auth else None
-                            ),
-                        )
-                        if qdb_client_args_dict.get("user")
-                        else None
-                    )
+                    # Update auth tuple, preserving parts not overridden
+                    base_user = client.auth[0] if client.auth else None
+                    base_pass = client.auth[1] if client.auth else None
+                    final_user = qdb_client_args_dict.get("user", base_user)
+                    final_pass = qdb_client_args_dict.get("password", base_pass)
+                    client.auth = (final_user, final_pass) if final_user else None
                 if "timeout" in qdb_client_args_dict:
                     client.timeout = qdb_client_args_dict["timeout"]
                 if "scheme" in qdb_client_args_dict:
-                    # Use from_config_file if --config was passed
-                    # Apply other CLI args as overrides if present
-                    # Override with any other connection args from CLI
-                    # Basic host replace
-                    # Basic port replace
-                    client.base_url = (
-                        qdb_client_args_dict["scheme"]
-                        + "://"
-                        + client.base_url.split("://")[1]
+                    # Replace scheme in base_url
+                    base_scheme = client.base_url.split("://")[0]
+                    client.base_url = client.base_url.replace(
+                        f"{base_scheme}://", f"{qdb_client_args_dict['scheme']}://", 1
                     )
             else:
                 # Standard init: uses explicit args > default config > defaults
@@ -436,41 +436,69 @@ def main():
             )
             sys.exit(1)
     # --- Execution Logic ---
-    # Base command for exec, including any *non-connection* args passed
-    qdb_exec_base_cmd = ["exec"] + qdb_exec_extra_args
     if not args.name:
         # --- Mode: Print data to stdout ---
+        output_format = "CSV" if args.csv else "PSQL table"
         if args.info:
             print(
-                "i No table name specified (--name). Printing generated data to stdout.",
+                f"i No table name specified (--name). Printing generated data to stdout as {output_format}.",
                 file=sys.stderr,
             )
         select_query = (
             f"SELECT\n  {', '.join(select_list)}\nFROM long_sequence({args.rows});"
         )
-        qdb_cmd_args = qdb_exec_base_cmd + ["-q", select_query] + ["--psql"]
+        # Base command for exec/exp, including any *non-connection* args passed
+        qdb_cmd_base = []
+        if args.csv:
+            qdb_cmd_base = ["exp"] + qdb_exec_or_exp_extra_args + [select_query]
+            # Construct full command for dry run display
+            dry_run_cmd_name = "exp"
+            dry_run_query_arg = [select_query]
+            dry_run_format_arg = []
+        else:
+            qdb_cmd_base = (
+                ["exec"] + qdb_exec_or_exp_extra_args + ["-q", select_query, "--psql"]
+            )
+            # Construct full command for dry run display
+            dry_run_cmd_name = "exec"
+            dry_run_query_arg = ["-q", select_query]
+            dry_run_format_arg = ["--psql"]
         if args.dry_run:
-            print("\n--- Dry Run: Command to print data ---")
+            print(f"\n--- Dry Run: Command to print data ({output_format}) ---")
             dry_run_full_cmd = ["qdb-cli"]
             if args.info:
                 dry_run_full_cmd.append("--info")
             # Include original connection args for dry-run clarity
             dry_run_full_cmd.extend(args.qdb_cli_args)
-            # Use the actual command part built for exec
-            dry_run_full_cmd.extend(["exec", "-q", select_query, "--psql"])
+            # Use the actual command part built for exec/exp
+            dry_run_full_cmd.extend(
+                [dry_run_cmd_name]
+                + qdb_exec_or_exp_extra_args
+                + dry_run_query_arg
+                + dry_run_format_arg
+            )
             print(shlex.join(dry_run_full_cmd))
         else:
             result = run_qdb_cli(
-                qdb_cmd_args, info=args.info
+                qdb_cmd_base, info=args.info
             )  # Pass script's info flag
             print(result.stdout, end="")
             if args.info:
-                print("\nData printed successfully.", file=sys.stderr)
+                print(
+                    f"\nData printed successfully ({output_format}).", file=sys.stderr
+                )
     else:
         # --- Mode: Create/Insert into table ---
         table_name = args.name
+        if args.csv:
+            print(
+                "Warning: --csv flag is ignored when --name is specified (inserting data).",
+                file=sys.stderr,
+            )
         if args.info:
             print(f"i Target table: '{table_name}'", file=sys.stderr)
+        # Base command for exec only, including any *non-connection* args passed
+        qdb_exec_base_cmd = ["exec"] + qdb_exec_or_exp_extra_args
         # 1. Check if table exists (unless dry run)
         exists = False
         if not args.dry_run:
@@ -521,8 +549,10 @@ def main():
                     create_full_cmd_dry_run.append("--info")
                 # Include original connection args
                 create_full_cmd_dry_run.extend(args.qdb_cli_args)
-                # Add the actual command part
-                create_full_cmd_dry_run.extend(["exec", "-q", create_sql])
+                # Add the actual command part (exec only for create)
+                create_full_cmd_dry_run.extend(
+                    ["exec"] + qdb_exec_or_exp_extra_args + ["-q", create_sql]
+                )
                 create_cmd_str = shlex.join(create_full_cmd_dry_run)
                 if args.dry_run:
                     print("\n--- Dry Run: Command to CREATE table ---")
@@ -539,7 +569,8 @@ def main():
                             file=sys.stderr,
                         )
             except SystemExit:
-                sys.exit(1)
+                # Propagate exit from build_create_statement validation
+                raise
             except Exception as e:
                 print(
                     f"\nError building/executing CREATE statement: {e}", file=sys.stderr
@@ -562,14 +593,17 @@ def main():
                 insert_full_cmd_dry_run.append("--info")
             # Include original connection args
             insert_full_cmd_dry_run.extend(args.qdb_cli_args)
-            # Add the actual command part
-            insert_full_cmd_dry_run.extend(["exec", "-q", insert_sql])
+            # Add the actual command part (exec only for insert)
+            insert_full_cmd_dry_run.extend(
+                ["exec"] + qdb_exec_or_exp_extra_args + ["-q", insert_sql]
+            )
             insert_cmd_str = shlex.join(insert_full_cmd_dry_run)
             if args.dry_run:
                 print("\n--- Dry Run: Command to INSERT data ---")
                 print(insert_cmd_str)
-                if not exists and create_cmd_str and args.info:
-                    print("\n(Table would have been created first if not dry run)")
+                # Show create command again if it would have run
+                if not exists and create_cmd_str:
+                    print("\n(Table creation command shown above)")
             else:
                 if args.info:
                     print(
