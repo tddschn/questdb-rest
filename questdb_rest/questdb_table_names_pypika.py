@@ -42,7 +42,7 @@ def setup_arg_parser() -> argparse.ArgumentParser:  # Use python script name
     parser = argparse.ArgumentParser(
         description="Get a list of table names or full table info from QuestDB, with filtering and sorting options.",
         formatter_class=argparse.RawTextHelpFormatter,
-        epilog="Examples:\n  # list all table names (default order)\n  {prog}\n\n  # list tables matching 'trade' AND 'usd'\n  {prog} trade usd\n\n  # list tables matching 'trade' but NOT 'backup' or 'temp'\n  {prog} trade -v backup temp\n\n  # list tables NOT matching 'backup_' or starting with 'test_'\n  {prog} -v backup_ 'test_.*'\n\n  # list tables partitioned by YEAR or MONTH\n  {prog} -P YEAR,MONTH\n\n  # list WAL tables with deduplication enabled and a designated timestamp\n  {prog} -d -t\n\n  # show full info for tables starting with 'trade', partitioned by DAY\n  {prog} -f -P DAY trades_\n\n  # show full info for tables matching 'schwab' and NOT 'test', with length >= 10\n  {prog} schwab -v test -l 10 -f\n\n  # list tables matching 'schwab' that have no designated timestamp\n  {prog} schwab -T\n\n  # list tables sorted by name descending, limit 10\n  {prog} -s table_name -r -n 10\n\n  # list tables sorted by default (table_name) ascending, limit 5\n  {prog} -s -n 5\n".format(
+        epilog="Examples:\n  # list all table names (default order)\n  {prog}\n\n  # list tables matching 'trade' AND 'usd'\n  {prog} trade usd\n\n  # list tables matching 'trade' but NOT 'backup' or 'temp'\n  {prog} trade -v backup temp\n\n  # list tables NOT matching 'backup_' or starting with 'test_'\n  {prog} -v backup_ 'test_.*'\n\n  # list tables NOT matching 'backup_' or starting with 'test_' case-insensitively\n  {prog} -i -v backup_ 'test_.*'\n\n  # list tables matching 'schwab' case-insensitively\n  {prog} -i schwab\n\n  # list tables partitioned by YEAR or MONTH\n  {prog} -P YEAR,MONTH\n\n  # list WAL tables with deduplication enabled and a designated timestamp\n  {prog} -d -t\n\n  # show full info for tables starting with 'trade', partitioned by DAY\n  {prog} -f -P DAY trades_\n\n  # show full info for tables matching 'schwab' and NOT 'test', with length >= 10\n  {prog} schwab -v test -l 10 -f\n\n  # list tables matching 'schwab' that have no designated timestamp\n  {prog} schwab -T\n\n  # list tables sorted by name descending, limit 10\n  {prog} -s table_name -r -n 10\n\n  # list tables sorted by default (table_name) ascending, limit 5\n  {prog} -s -n 5\n".format(
             prog="qdb-table-names.py"
         ),
     )
@@ -63,6 +63,12 @@ def setup_arg_parser() -> argparse.ArgumentParser:  # Use python script name
         dest="inverse_regexes",
         default=[],
         help="One or more regex patterns where table names must NOT match (uses '!~'). All inverse patterns must NOT match (AND logic).",
+    )
+    parser.add_argument(
+        "-i",
+        "--case-insensitive",
+        action="store_true",
+        help="Perform case-insensitive matching for --regex and --inverse-match patterns.",
     )
     uuid_group = parser.add_mutually_exclusive_group()
     uuid_group.add_argument(
@@ -215,23 +221,28 @@ def build_sql_query(args: argparse.Namespace) -> str:
         query = query.where(Criterion.all(pypika_conditions))
     # Collect conditions requiring raw SQL strings
     raw_sql_conditions: List[str] = []
+    # Determine the column expression for regex matching based on case sensitivity
+    table_name_expr = "LOWER(table_name)" if args.case_insensitive else "table_name"
     # Positive Regex Filters (args.regex is now a list)
     for pattern in args.regex:
         # Basic escaping for single quotes in the pattern
         safe_regex = pattern.replace("'", "''")
-        # Use the column name directly in the raw string
-        raw_sql_conditions.append(f"table_name ~ '{safe_regex}'")
+        # Use the correct column expression based on case sensitivity
+        raw_sql_conditions.append(f"{table_name_expr} ~ '{safe_regex}'")
     # Inverse Regex Filters (args.inverse_regexes is now a list)
     for pattern in args.inverse_regexes:
         # Basic escaping for single quotes in the pattern
         safe_regex = pattern.replace("'", "''")
-        # Use the column name directly in the raw string
-        raw_sql_conditions.append(f"table_name !~ '{safe_regex}'")
-    # UUID Filter
+        # Use the correct column expression based on case sensitivity
+        raw_sql_conditions.append(f"{table_name_expr} !~ '{safe_regex}'")
+    # UUID Filter (case insensitive is irrelevant for UUID format)
+    uuid_table_name_expr = (
+        "table_name"  # UUID regex is case-insensitive by definition [0-9a-f]
+    )
     if args.uuid:
-        raw_sql_conditions.append(f"table_name ~ '{UUID_REGEX}'")
+        raw_sql_conditions.append(f"{uuid_table_name_expr} ~ '{UUID_REGEX}'")
     elif args.no_uuid:
-        raw_sql_conditions.append(f"table_name !~ '{UUID_REGEX}'")
+        raw_sql_conditions.append(f"{uuid_table_name_expr} !~ '{UUID_REGEX}'")
     # Get the SQL string generated by PyPika so far
     # Use get_sql() for consistency, though str() often works
     sql_string = query.get_sql()
@@ -267,6 +278,8 @@ def build_sql_query(args: argparse.Namespace) -> str:
     # Handle cases where column names might still be qualified if selected individually (less likely now)
     for col in KNOWN_TABLES_COLS:
         sql_string = sql_string.replace(f'"tables"."{col}"', f'"{col}"')
+    # Handle potential quoting of LOWER function by pypika if it were used (it's raw now)
+    # sql_string = sql_string.replace('"LOWER"', 'LOWER') # Likely not needed as it's raw string
     return sql_string
 
 
