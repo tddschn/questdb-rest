@@ -15,9 +15,10 @@ packages = [{ include = "questdb_rest" }]
 qdb-cli = "questdb_rest.cli:main"
 questdb-cli = "questdb_rest.cli:main"
 qdb-tables = "questdb_rest.questdb_table_names_pypika:main"
+qdb-canned-queries = "questdb_rest.qdb_canned_queries_pypika:main"
 qdb-table-names = { reference = "scripts/qdb-table-names", type = "file" }
 qdb-cols = { reference = "scripts/qdb-cols", type = "file" }
-qdb-canned-queries = { reference = "scripts/qdb-canned-queries", type = "file" }
+# qdb-canned-queries = { reference = "scripts/qdb-canned-queries", type = "file" }
 qdb-canned-queries-fzf = { reference = "scripts/qdb-canned-queries-fzf", type = "file" }
 qdb-drop-tables-by-regex = { reference = "scripts/qdb-drop-tables-by-regex", type = "file" }
 # questdb-drop-tables-by-regex = { reference = "scripts/questdb-drop-tables-by-regex", type = "file" }
