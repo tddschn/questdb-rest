@@ -49,11 +49,11 @@ Examples:
   # show full info for tables starting with 'trade', partitioned by DAY
   $(basename "$0") -f -P DAY trades_
 
-  # show full info for tables matching 'schwab' with length >= 10 (options after regex)
-  $(basename "$0") schwab -l 10 -f
+  # show full info for tables matching 'cme_liq' with length >= 10 (options after regex)
+  $(basename "$0") cme_liq -l 10 -f
 
-  # list tables matching 'schwab' that have no designated timestamp
-  $(basename "$0") schwab -T
+  # list tables matching 'cme_liq' that have no designated timestamp
+  $(basename "$0") cme_liq -T
 EOF
 }
 
