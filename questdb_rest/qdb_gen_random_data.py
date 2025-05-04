@@ -108,40 +108,49 @@ def run_qdb_cli(
         sys.exit(1)
 
 
-def build_select_list(types_to_generate: List[str]) -> List[str]:
-    """Builds the SELECT clause parts: `rnd_func() AS col_name`."""
+def build_select_list(types_to_generate: List[str], repeat: int) -> List[str]:
+    """Builds the SELECT clause parts: `rnd_func() AS col_name[_N]`."""
     select_parts = []
     for type_name in types_to_generate:
         rnd_func, _ = TYPE_MAPPING[type_name]
-        col_name = f"{type_name}_val"  # Define column name convention
-        select_parts.append(f"{rnd_func} AS {col_name}")
+        if repeat == 1:
+            col_name = f"{type_name}_val"  # Original naming convention
+            select_parts.append(f"{rnd_func} AS {col_name}")
+        else:
+            for i in range(1, repeat + 1):
+                col_name = f"{type_name}_val_{i}"  # Append suffix for repeats > 1
+                select_parts.append(f"{rnd_func} AS {col_name}")
     return select_parts
 
 
 def build_create_statement(
     table_name: str,
     types_to_generate: List[str],
+    repeat: int,
     timestamp_col: Optional[str],
     partition_by: Optional[str],
     info: bool = False,
 ) -> str:
-    """Builds the CREATE TABLE statement."""
+    """Builds the CREATE TABLE statement, handling repeated columns."""
     col_defs = []
-    has_timestamp_type = False
-    timestamp_col_name_in_defs = None
+    generated_ts_cols = []  # Store names of all generated timestamp columns
     for type_name in types_to_generate:
         _, sql_type = TYPE_MAPPING[type_name]
-        col_name = f"{type_name}_val"
-        col_defs.append(f'"{col_name}" {sql_type}')  # Quote column names
-        if type_name == "timestamp":
-            has_timestamp_type = True
-            if timestamp_col_name_in_defs is None:  # Store the first timestamp col name
-                timestamp_col_name_in_defs = col_name
-    # Validate timestamp column if provided
+        if repeat == 1:
+            col_name = f"{type_name}_val"
+            col_defs.append(f'"{col_name}" {sql_type}')
+            if type_name == "timestamp":
+                generated_ts_cols.append(col_name)
+        else:
+            for i in range(1, repeat + 1):
+                col_name = f"{type_name}_val_{i}"
+                col_defs.append(f'"{col_name}" {sql_type}')
+                if type_name == "timestamp":
+                    generated_ts_cols.append(col_name)
+    # Validate and determine the designated timestamp column
     effective_timestamp_col = None
     if timestamp_col:
-        # Ensure the provided name corresponds to a generated timestamp column
-        generated_ts_cols = [f"{t}_val" for t in types_to_generate if t == "timestamp"]
+        # Check if the specified column is among the generated timestamp columns
         if timestamp_col not in generated_ts_cols:
             print(
                 f"Error: Specified --timestamp-col '{timestamp_col}' does not match any generated timestamp column name ({', '.join(generated_ts_cols) or 'none'}).",
@@ -149,30 +158,29 @@ def build_create_statement(
             )
             sys.exit(1)
         effective_timestamp_col = timestamp_col
-    elif has_timestamp_type:
-        # Auto-detect if only one timestamp type is present and --timestamp-col not given
-        timestamp_cols = [f"{t}_val" for t in types_to_generate if t == "timestamp"]
-        if len(timestamp_cols) == 1:
-            effective_timestamp_col = timestamp_cols[0]
-            # Only print auto-detection message if info flag is set
-            if info:
-                print(
-                    f"+ Auto-detected designated timestamp column: '{effective_timestamp_col}'",
-                    file=sys.stderr,
-                )
-        elif len(timestamp_cols) > 1:
-            # Always warn if multiple timestamps and none specified
+    elif len(generated_ts_cols) == 1:
+        # Auto-detect if exactly one timestamp column was generated overall
+        effective_timestamp_col = generated_ts_cols[0]
+        if info:
             print(
-                f"Warning: Multiple timestamp columns generated ({', '.join(timestamp_cols)}) but --timestamp-col not specified. No designated timestamp will be set.",
+                f"+ Auto-detected designated timestamp column: '{effective_timestamp_col}'",
                 file=sys.stderr,
             )
+    elif len(generated_ts_cols) > 1:
+        # Always warn if multiple timestamps and none specified
+        print(
+            f"Warning: Multiple timestamp columns generated ({', '.join(generated_ts_cols)}) but --timestamp-col not specified. No designated timestamp will be set.",
+            file=sys.stderr,
+        )
     # Escape table name for the query
     safe_table_name = table_name.replace('"', '""')
     create_sql = f'CREATE TABLE "{safe_table_name}" (\n  '
     create_sql += ",\n  ".join(col_defs)
     create_sql += "\n)"
     if effective_timestamp_col:
-        create_sql += f' TIMESTAMP("{effective_timestamp_col}")'  # Quote column name
+        # Ensure the column name is quoted if it contains special characters or needs case sensitivity
+        safe_ts_col_name = effective_timestamp_col.replace('"', '""')
+        create_sql += f' TIMESTAMP("{safe_ts_col_name}")'
     if partition_by:
         if not effective_timestamp_col:
             print(
@@ -180,7 +188,8 @@ def build_create_statement(
                 file=sys.stderr,
             )
             sys.exit(1)
-        create_sql += f" PARTITION BY {partition_by.upper()}"  # Partition strategy usually case-insensitive
+        # Partition strategy usually case-insensitive, but keep as provided
+        create_sql += f" PARTITION BY {partition_by.upper()}"
     create_sql += ";"
     return create_sql
 
@@ -229,15 +238,24 @@ def setup_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Generate columns for all available types, ignoring --types.",
     )
+    # New argument for repeating types
+    parser.add_argument(
+        "-r",
+        "--repeat",
+        type=int,
+        default=1,
+        metavar="COUNT",
+        help="Repeat each specified type this many times (default: 1).",
+    )
     parser.add_argument(
         "-P",
         "--partitionBy",
         choices=["NONE", "YEAR", "MONTH", "DAY", "HOUR", "WEEK"],
-        help="Partitioning strategy (requires --name and a timestamp column).",
+        help="Partitioning strategy (requires --name and a designated timestamp column).",
     )
     parser.add_argument(
         "--timestamp-col",
-        help="Specify the designated timestamp column name (e.g., 'timestamp_val'). Must be one of the generated columns of type 'timestamp'. Auto-detected if only one timestamp column is generated.",
+        help="Specify the designated timestamp column name (e.g., 'timestamp_val' or 'timestamp_val_1'). Must be one of the generated columns of type 'timestamp'. Auto-detected if only one timestamp column is generated overall.",
     )
     parser.add_argument(
         "--dry-run",
@@ -281,6 +299,15 @@ def main():
     if args.rows <= 0:
         print("Error: --rows must be a positive integer.", file=sys.stderr)
         sys.exit(1)
+    # Validate repeat argument
+    if args.repeat <= 0:
+        print("Error: --repeat must be a positive integer.", file=sys.stderr)
+        sys.exit(1)
+    elif args.repeat > 1 and args.info:
+        print(
+            f"i Each specified type will be repeated {args.repeat} times.",
+            file=sys.stderr,
+        )
     # Determine types to generate
     if args.all_types:
         types_to_generate = sorted(list(TYPE_MAPPING.keys()))
@@ -365,7 +392,8 @@ def main():
             qdb_exec_or_exp_extra_args.append(arg)
         i += 1
     # --- Build SQL components ---
-    select_list = build_select_list(types_to_generate)
+    # Pass repeat argument here
+    select_list = build_select_list(types_to_generate, args.repeat)
     # --- Instantiate Client (only if needed and not dry run) ---
     client: Optional[QuestDBClient] = None
     # Client is needed if inserting (--name) OR if checking existence (also --name)
@@ -535,9 +563,11 @@ def main():
                     file=sys.stderr,
                 )
             try:  # Pass info flag here too
+                # Pass repeat argument here
                 create_sql = build_create_statement(
                     table_name,
                     types_to_generate,
+                    args.repeat,
                     args.timestamp_col,
                     args.partitionBy,
                     info=args.info,
