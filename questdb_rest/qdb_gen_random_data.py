@@ -49,7 +49,7 @@ TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "uuid": ("rnd_uuid4()", "UUID"),
     "ipv4": ("rnd_ipv4()", "IPV4"),
     "binary": ("rnd_bin()", "BINARY"),
-    "geohash": ("rnd_geohash(30)", "GEOGRAPHY"),
+    # "geohash": ("rnd_geohash(30)", "GEOHASH"),
 }
 DEFAULT_TYPES = ["float"]
 # --- Helper Functions ---
