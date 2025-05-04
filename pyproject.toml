@@ -14,7 +14,7 @@ packages = [{ include = "questdb_rest" }]
 [tool.poetry.scripts]
 qdb-cli = "questdb_rest.cli:main"
 questdb-cli = "questdb_rest.cli:main"
-questdb-tables = "questdb_rest.questdb_table_names_pypika:main"
+qdb-tables = "questdb_rest.questdb_table_names_pypika:main"
 qdb-table-names = { reference = "scripts/qdb-table-names", type = "file" }
 qdb-cols = { reference = "scripts/qdb-cols", type = "file" }
 qdb-canned-queries = { reference = "scripts/qdb-canned-queries", type = "file" }
