@@ -20,7 +20,7 @@ Links:
 - PyPI: https://pypi.org/project/questdb-rest/
 
 Enable shell completion with this command:
-    eval "$(uvx --from argcomplete register-python-argcomplete qdb-cli)"
+    eval "$(uvx --from argcomplete register-python-argcomplete %(prog)s)"
 """
 
 
