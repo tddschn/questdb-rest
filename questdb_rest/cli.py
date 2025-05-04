@@ -20,7 +20,7 @@
 import uuid
 import argparse
 import html
-from typing import Any, Dict
+from typing import Any, Dict, Union
 import sys
 import json
 import logging
@@ -41,6 +41,7 @@ from questdb_rest import (
     CLI_EPILOG,
 )
 
+_EXEC_EXTRACT_FIELD_SENTINEL = object()
 # --- Configuration ---
 DEFAULT_HOST = "localhost"
 DEFAULT_PORT = 9000  # Use the default from the library/docs
@@ -708,7 +709,8 @@ def simulate_exec(args, statement, statement_index, total_statements):
     filtered_params = {k: v for k, v in params.items() if v is not None}
     # Modify simulation if --extract-field is used
     if args.extract_field:
-        logger.info(f"[DRY-RUN]   Mode: Extract Field ('{args.extract_field}')")
+        field_arg = _get_real_extract_field(args)
+        logger.info(f"[DRY-RUN]   Mode: Extract Field ('{field_arg}')")
         # Simulate extracted output (one value per line)
         print("simulated_extracted_value_1")
         if not args.one:
@@ -1037,6 +1039,15 @@ def handle_imp(args, client: QuestDBClient):
         sys.exit(0)
 
 
+def _get_real_extract_field(args: argparse.Namespace) -> Union[str, int]:
+    if args.extract_field is _EXEC_EXTRACT_FIELD_SENTINEL:
+        # extract first field if -x used but not specified
+        field_arg = 0
+    else:
+        field_arg = args.extract_field
+    return field_arg
+
+
 def handle_exec(args, client: QuestDBClient):
     """Handles the /exec command using the client."""
     import importlib  # added for module query import
@@ -1110,6 +1121,7 @@ def handle_exec(args, client: QuestDBClient):
     # Use double newline for markdown/psql
     # No separator needed if only one statement
     output_separator = ""
+
     if len(statements) > 1:
         if args.markdown or (args.psql and (not args.extract_field)):
             output_separator = "\n\n"
@@ -1140,8 +1152,8 @@ def handle_exec(args, client: QuestDBClient):
             # --- Choose execution method ---
             response_data = None
             if args.extract_field:
+                field_arg = _get_real_extract_field(args)
                 # Convert field name to int if it looks like one
-                field_arg = args.extract_field
                 try:
                     field_identifier: Union[str, int] = int(field_arg)
                     logger.debug(f"Using field index: {field_identifier}")
@@ -2827,7 +2839,10 @@ def _add_parser_exec(subparsers: argparse._SubParsersAction):
         "-x",
         "--extract-field",
         metavar="FIELD_NAME_OR_INDEX",
-        help="Extract only the specified column/field (by name or 0-based index) and print each value on a new line. Overrides --markdown/--psql/--count/--timings/--explain.",
+        default=0,
+        const=_EXEC_EXTRACT_FIELD_SENTINEL,
+        nargs="?",
+        help="Extract only the specified column/field (by name or 0-based index) and print each value on a new line. If -x is used but no value provided, the first col will be extracted. Overrides --markdown/--psql/--count/--timings/--explain.",
     )
     exec_format_group = (
         parser_exec.add_mutually_exclusive_group()
