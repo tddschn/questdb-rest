@@ -13,6 +13,12 @@ from typing import Dict, List, Tuple, Optional
 # --- Configuration: Mapping CLI types to QuestDB functions and types ---
 # Format: 'cli_type_name': (rnd_function_call, sql_data_type)
 # Added default arguments for functions requiring them for basic usage.
+# Example: 5-10 chars, no nulls
+# Example: 4 distinct symbols, 1-5 chars, no nulls
+# Example: 5-10 chars, no nulls
+# Example: since 2020, no nulls
+# Example: since 2020, no nulls
+# Example: 4-16 bytes, no nulls
 TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "boolean": ("rnd_boolean()", "BOOLEAN"),
     "byte": ("rnd_byte()", "BYTE"),
@@ -22,39 +28,50 @@ TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "float": ("rnd_float()", "FLOAT"),
     "double": ("rnd_double()", "DOUBLE"),
     "char": ("rnd_char()", "CHAR"),
-    "string": ("rnd_str(5, 10, 0)", "STRING"), # Example: 5-10 chars, no nulls
-    "symbol": ("rnd_symbol(4, 1, 5, 0)", "SYMBOL"), # Example: 4 distinct symbols, 1-5 chars, no nulls
-    "varchar": ("rnd_varchar(5, 10, 0)", "VARCHAR"), # Example: 5-10 chars, no nulls
-    "date": ("rnd_date(to_date('2020-01-01', 'yyyy-MM-dd'), now(), 0)", "DATE"), # Example: since 2020, no nulls
-    "timestamp": ("rnd_timestamp(to_timestamp('2020-01-01T00:00:00.000Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ'), now(), 0)", "TIMESTAMP"), # Example: since 2020, no nulls
+    "string": ("rnd_str(5, 10, 0)", "STRING"),
+    "symbol": ("rnd_symbol(4, 1, 5, 0)", "SYMBOL"),
+    "varchar": ("rnd_varchar(5, 10, 0)", "VARCHAR"),
+    "date": ("rnd_date(to_date('2020-01-01', 'yyyy-MM-dd'), now(), 0)", "DATE"),
+    "timestamp": (
+        "rnd_timestamp(to_timestamp('2020-01-01T00:00:00.000Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ'), now(), 0)",
+        "TIMESTAMP",
+    ),
     "long256": ("rnd_long256()", "LONG256"),
     "uuid": ("rnd_uuid4()", "UUID"),
     "ipv4": ("rnd_ipv4()", "IPV4"),
-    "binary": ("rnd_bin(4, 16, 0)", "BINARY"), # Example: 4-16 bytes, no nulls
+    "binary": ("rnd_bin(4, 16, 0)", "BINARY"),
 }
-
 DEFAULT_TYPES = ["float"]
-
 # --- Helper Functions ---
 
-def run_qdb_cli(cmd_args: List[str], check: bool = True) -> subprocess.CompletedProcess:
+
+def run_qdb_cli(
+    cmd_args: List[str], check: bool = True, info: bool = False
+) -> subprocess.CompletedProcess:
     """Runs a qdb-cli command and returns the result."""
     try:
         # Ensure 'qdb-cli' is the first element
-        if not cmd_args or cmd_args[0] != "qdb-cli":
-            cmd_args.insert(0, "qdb-cli")
-
-        print(f"+ Running: {shlex.join(cmd_args)}", file=sys.stderr)
+        full_cmd = ["qdb-cli"]
+        # Prepend --info if requested
+        if info:
+            full_cmd.append("--info")
+        # Append the actual command and its arguments
+        full_cmd.extend(cmd_args)
+        # Only print if --info is passed to this script
+        if info:
+            print(f"+ Running: {shlex.join(full_cmd)}", file=sys.stderr)
         # Use text=True for automatic decoding, capture output
+        # Handle potential decoding errors
         result = subprocess.run(
-            cmd_args,
+            full_cmd,
             check=check,
             capture_output=True,
             text=True,
-            encoding='utf-8',
-            errors='replace' # Handle potential decoding errors
+            encoding="utf-8",
+            errors="replace",
         )
-        if result.stderr:
+        # Only print stderr if --info is passed
+        if info and result.stderr:
             print(f"  stderr:\n{result.stderr.strip()}", file=sys.stderr)
         return result
     except FileNotFoundError:
@@ -62,269 +79,366 @@ def run_qdb_cli(cmd_args: List[str], check: bool = True) -> subprocess.Completed
         print("Please ensure it's installed and in your PATH.", file=sys.stderr)
         sys.exit(1)
     except subprocess.CalledProcessError as e:
-        # Error is already printed by the check=True mechanism if stderr/stdout exists
-        print(f"Error: qdb-cli command failed with exit code {e.returncode}.", file=sys.stderr)
-        # If check=False was used, we might want to print details here
-        # print(f"  stdout:\n{e.stdout}", file=sys.stderr)
-        # print(f"  stderr:\n{e.stderr}", file=sys.stderr)
-        # Re-raise or exit based on 'check' argument or desired behavior
+        # Error details are usually printed to stderr by qdb-cli itself
+        print(
+            f"Error: qdb-cli command failed with exit code {e.returncode}.",
+            file=sys.stderr,
+        )
+        # Print captured output only if info flag wasn't set (as it would be redundant)
+        if not info:
+            if e.stdout:
+                print(f"  qdb-cli stdout:\n{e.stdout.strip()}", file=sys.stderr)
+            if e.stderr:
+                print(f"  qdb-cli stderr:\n{e.stderr.strip()}", file=sys.stderr)
         if check:
-            sys.exit(e.returncode) # Propagate error exit code
-        raise # Re-raise if check=False and caller needs to handle it
+            sys.exit(e.returncode)  # Propagate error exit code
+        raise  # Re-raise if check=False and caller needs to handle it
     except Exception as e:
         print(f"An unexpected error occurred running qdb-cli: {e}", file=sys.stderr)
         sys.exit(1)
 
-def check_table_exists(table_name: str) -> bool:
-    """Checks if a QuestDB table exists using `qdb-cli chk`."""
-    print(f"+ Checking if table '{table_name}' exists...", file=sys.stderr)
-    result = run_qdb_cli(["chk", table_name], check=False) # Don't exit script if check fails
 
+def check_table_exists(table_name: str, info: bool = False) -> bool:
+    """Checks if a QuestDB table exists using `qdb-cli chk`."""
+    # Only print check message if info flag is set
+    if info:
+        print(f"+ Checking if table '{table_name}' exists...", file=sys.stderr)
+    # Pass the info flag down
+    result = run_qdb_cli(["chk", table_name], check=False, info=info)
     if result.returncode == 0:
         try:
             chk_output = json.loads(result.stdout)
             exists = chk_output.get("status") == "Exists"
-            print(f"  Result: {'Exists' if exists else 'Does not exist'}", file=sys.stderr)
+            # Only print result message if info flag is set
+            if info:
+                print(
+                    f"  Result: {('Exists' if exists else 'Does not exist')}",
+                    file=sys.stderr,
+                )
             return exists
         except json.JSONDecodeError:
-            print(f"Warning: Could not parse JSON from 'qdb-cli chk {table_name}'. Assuming table does not exist.", file=sys.stderr)
-            print(f"  Raw stdout: {result.stdout}", file=sys.stderr)
+            print(
+                f"Warning: Could not parse JSON from 'qdb-cli chk {table_name}'. Assuming table does not exist.",
+                file=sys.stderr,
+            )
+            if info:  # Only print raw output if info requested
+                print(f"  Raw stdout: {result.stdout}", file=sys.stderr)
             return False
         except Exception as e:
-             print(f"Warning: Error processing 'qdb-cli chk {table_name}' output: {e}. Assuming table does not exist.", file=sys.stderr)
-             return False
-    elif result.returncode == 3: # Specific exit code from `chk` if table does not exist
-        print("  Result: Does not exist (exit code 3)", file=sys.stderr)
+            print(
+                f"Warning: Error processing 'qdb-cli chk {table_name}' output: {e}. Assuming table does not exist.",
+                file=sys.stderr,
+            )
+            return False
+    elif (
+        result.returncode == 3
+    ):  # Specific exit code from `chk` if table does not exist
+        if info:
+            print("  Result: Does not exist (exit code 3)", file=sys.stderr)
         return False
     else:
         # Other errors (connection, etc.)
-        print(f"Warning: 'qdb-cli chk {table_name}' failed with exit code {result.returncode}. Assuming table does not exist.", file=sys.stderr)
-        return False # Treat other errors as "doesn't exist" for safety
+        print(
+            f"Warning: 'qdb-cli chk {table_name}' failed with exit code {result.returncode}. Assuming table does not exist.",
+            file=sys.stderr,
+        )
+        return False  # Treat other errors as "doesn't exist" for safety
+
 
 def build_select_list(types_to_generate: List[str]) -> List[str]:
     """Builds the SELECT clause parts: `rnd_func() AS col_name`."""
     select_parts = []
     for type_name in types_to_generate:
         rnd_func, _ = TYPE_MAPPING[type_name]
-        col_name = f"{type_name}_val" # Define column name convention
+        col_name = f"{type_name}_val"  # Define column name convention
         select_parts.append(f"{rnd_func} AS {col_name}")
     return select_parts
 
-def build_create_statement(table_name: str, types_to_generate: List[str], timestamp_col: Optional[str], partition_by: Optional[str]) -> str:
+
+def build_create_statement(
+    table_name: str,
+    types_to_generate: List[str],
+    timestamp_col: Optional[str],
+    partition_by: Optional[str],
+    info: bool = False,
+) -> str:
     """Builds the CREATE TABLE statement."""
     col_defs = []
     has_timestamp_type = False
     timestamp_col_name_in_defs = None
-
     for type_name in types_to_generate:
         _, sql_type = TYPE_MAPPING[type_name]
         col_name = f"{type_name}_val"
-        col_defs.append(f'"{col_name}" {sql_type}') # Quote column names
+        col_defs.append(f'"{col_name}" {sql_type}')  # Quote column names
         if type_name == "timestamp":
             has_timestamp_type = True
-            if timestamp_col_name_in_defs is None: # Store the first timestamp col name
+            if timestamp_col_name_in_defs is None:  # Store the first timestamp col name
                 timestamp_col_name_in_defs = col_name
-
     # Validate timestamp column if provided
     effective_timestamp_col = None
     if timestamp_col:
-        if timestamp_col not in [f"{t}_val" for t in types_to_generate if t == "timestamp"]:
-             print(f"Error: Specified --timestamp-col '{timestamp_col}' does not match any generated timestamp column name ('timestamp_val').", file=sys.stderr)
-             sys.exit(1)
+        # Ensure the provided name corresponds to a generated timestamp column
+        generated_ts_cols = [f"{t}_val" for t in types_to_generate if t == "timestamp"]
+        if timestamp_col not in generated_ts_cols:
+            print(
+                f"Error: Specified --timestamp-col '{timestamp_col}' does not match any generated timestamp column name ({', '.join(generated_ts_cols) or 'none'}).",
+                file=sys.stderr,
+            )
+            sys.exit(1)
         effective_timestamp_col = timestamp_col
     elif has_timestamp_type:
         # Auto-detect if only one timestamp type is present and --timestamp-col not given
         timestamp_cols = [f"{t}_val" for t in types_to_generate if t == "timestamp"]
         if len(timestamp_cols) == 1:
             effective_timestamp_col = timestamp_cols[0]
-            print(f"i Auto-detected designated timestamp column: '{effective_timestamp_col}'", file=sys.stderr)
-        else:
-             print(f"Warning: Multiple timestamp columns generated ({', '.join(timestamp_cols)}) but --timestamp-col not specified. No designated timestamp will be set.", file=sys.stderr)
-
-
+            # Only print auto-detection message if info flag is set
+            if info:
+                print(
+                    f"+ Auto-detected designated timestamp column: '{effective_timestamp_col}'",
+                    file=sys.stderr,
+                )
+        elif len(timestamp_cols) > 1:
+            # Always warn if multiple timestamps and none specified
+            print(
+                f"Warning: Multiple timestamp columns generated ({', '.join(timestamp_cols)}) but --timestamp-col not specified. No designated timestamp will be set.",
+                file=sys.stderr,
+            )
     # Escape table name for the query
     safe_table_name = table_name.replace('"', '""')
     create_sql = f'CREATE TABLE "{safe_table_name}" (\n  '
     create_sql += ",\n  ".join(col_defs)
     create_sql += "\n)"
-
     if effective_timestamp_col:
-         create_sql += f' TIMESTAMP("{effective_timestamp_col}")' # Quote column name
-
+        create_sql += f' TIMESTAMP("{effective_timestamp_col}")'  # Quote column name
     if partition_by:
         if not effective_timestamp_col:
-            print("Error: --partitionBy requires a designated timestamp column (--timestamp-col or auto-detected).", file=sys.stderr)
+            print(
+                "Error: --partitionBy requires a designated timestamp column (--timestamp-col or auto-detected).",
+                file=sys.stderr,
+            )
             sys.exit(1)
-        create_sql += f" PARTITION BY {partition_by.upper()}" # Partition strategy usually case-insensitive
-
+        create_sql += f" PARTITION BY {partition_by.upper()}"  # Partition strategy usually case-insensitive
     create_sql += ";"
     return create_sql
+
 
 def build_insert_statement(table_name: str, select_list: List[str], rows: int) -> str:
     """Builds the INSERT INTO ... SELECT ... statement."""
     # Escape table name for the query
     safe_table_name = table_name.replace('"', '""')
     select_clause = ",\n    ".join(select_list)
-
     insert_sql = f'INSERT INTO "{safe_table_name}"\n  SELECT\n    {select_clause}\n  FROM long_sequence({rows});'
     return insert_sql
 
+
 # --- Argument Parser ---
+
+
 def setup_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate random data in QuestDB using rnd_* functions via qdb-cli.",
-        formatter_class=argparse.RawTextHelpFormatter
+        formatter_class=argparse.RawTextHelpFormatter,
     )
     parser.add_argument(
-        "-n", "--name",
-        help="Name of the target table. If provided, data will be inserted. If the table doesn't exist, it will be created first."
+        "-n",
+        "--name",
+        help="Name of the target table. If provided, data will be inserted. If the table doesn't exist, it will be created first.",
     )
     parser.add_argument(
-        "-N", "--rows",
-        type=int,
-        required=True,
-        help="Number of rows to generate."
+        "-N", "--rows", type=int, required=True, help="Number of rows to generate."
     )
     parser.add_argument(
-        "-t", "--types",
-        nargs='*',
+        "-t",
+        "--types",
+        nargs="*",
         default=DEFAULT_TYPES,
         choices=list(TYPE_MAPPING.keys()),
-        metavar='TYPE',
-        help=f"Space-separated list of data types to generate. Default: {' '.join(DEFAULT_TYPES)}. Available: {', '.join(TYPE_MAPPING.keys())}"
+        metavar="TYPE",
+        help=f"Space-separated list of data types to generate. Default: {' '.join(DEFAULT_TYPES)}. Available: {', '.join(TYPE_MAPPING.keys())}",
     )
-    # Removed --create flag, creation is implicit if --name is given and table doesn't exist.
-    # parser.add_argument(
-    #     "-c", "--create",
-    #     action='store_true',
-    #     help="Create the table specified by --name if it doesn't exist (Requires --name)."
-    # )
     parser.add_argument(
-        "-P", "--partitionBy",
+        "-P",
+        "--partitionBy",
         choices=["NONE", "YEAR", "MONTH", "DAY", "HOUR", "WEEK"],
-        help="Partitioning strategy (requires --name and a timestamp column)."
+        help="Partitioning strategy (requires --name and a timestamp column).",
     )
     parser.add_argument(
         "--timestamp-col",
-        help="Specify the designated timestamp column name (e.g., 'timestamp_val'). Must be one of the generated columns of type 'timestamp'. Auto-detected if only one timestamp column is generated."
+        help="Specify the designated timestamp column name (e.g., 'timestamp_val'). Must be one of the generated columns of type 'timestamp'. Auto-detected if only one timestamp column is generated.",
     )
     parser.add_argument(
         "--dry-run",
-        action='store_true',
-        help="Print the qdb-cli commands that would be executed, but don't run them."
+        action="store_true",
+        help="Print the qdb-cli commands that would be executed, but don't run them.",
+    )
+    # Add --info flag
+    parser.add_argument(
+        "-i",
+        "--info",
+        action="store_true",
+        help="Pass the --info flag to underlying qdb-cli calls for verbose logging.",
     )
     # Allow passing extra arguments directly to all `qdb-cli exec` calls
     parser.add_argument(
-        'qdb_cli_args',
+        "qdb_cli_args",
         nargs=argparse.REMAINDER,
-        help="Remaining arguments are passed directly to `qdb-cli exec` (e.g., --host, --port, auth details)."
+        help="Remaining arguments are passed directly to `qdb-cli` (e.g., --host, --port, auth details). Place these *after* script-specific options.",
     )
-
     return parser
 
+
 # --- Main Execution ---
+
+
 def main():
     parser = setup_arg_parser()
     args = parser.parse_args()
-
     if args.rows <= 0:
         print("Error: --rows must be a positive integer.", file=sys.stderr)
         sys.exit(1)
-
     # Validate selected types
     invalid_types = [t for t in args.types if t not in TYPE_MAPPING]
     if invalid_types:
-        print(f"Error: Invalid type(s) specified: {', '.join(invalid_types)}", file=sys.stderr)
+        print(
+            f"Error: Invalid type(s) specified: {', '.join(invalid_types)}",
+            file=sys.stderr,
+        )
         print(f"Available types: {', '.join(TYPE_MAPPING.keys())}", file=sys.stderr)
         sys.exit(1)
-
     # Ensure unique types
     types_to_generate = sorted(list(set(args.types)))
     if not types_to_generate:
         print("Error: No data types selected to generate.", file=sys.stderr)
         sys.exit(1)
-
-
     # --- Build SQL components ---
     select_list = build_select_list(types_to_generate)
-
     # --- Execution Logic ---
-    qdb_exec_base_cmd = ["exec"] + args.qdb_cli_args # Base command + extra user args
-
+    # Base command for exec, REMOVING qdb-cli global args (they are passed via qdb_cli_args)
+    qdb_exec_base_cmd = ["exec"] + args.qdb_cli_args
     if not args.name:
         # --- Mode: Print data to stdout ---
-        print("i No table name specified (--name). Printing generated data to stdout.", file=sys.stderr)
-        select_query = f"SELECT\n  {', '.join(select_list)}\nFROM long_sequence({args.rows});"
-        qdb_cmd = qdb_exec_base_cmd + ["--psql", "-q", select_query] # Use psql format for printing
-
+        # Only print status if --info
+        if args.info:
+            print(
+                "i No table name specified (--name). Printing generated data to stdout.",
+                file=sys.stderr,
+            )
+        select_query = (
+            f"SELECT\n  {', '.join(select_list)}\nFROM long_sequence({args.rows});"
+        )
+        # Prepend --psql for better formatting when printing
+        qdb_cmd_args = qdb_exec_base_cmd + ["-q", select_query] + ["--psql"]
         if args.dry_run:
             print("\n--- Dry Run: Command to print data ---")
-            print(shlex.join(["qdb-cli"] + qdb_cmd))
+            # Construct the full command including qdb-cli and --info if needed
+            dry_run_full_cmd = ["qdb-cli"]
+            if args.info:
+                dry_run_full_cmd.append("--info")
+            dry_run_full_cmd.extend(qdb_cmd_args)
+            print(shlex.join(dry_run_full_cmd))
         else:
-            result = run_qdb_cli(qdb_cmd)
-            print(result.stdout, end='') # Print query result to stdout
-            print("\nData printed successfully.", file=sys.stderr)
-
+            # Pass the args.info flag down
+            result = run_qdb_cli(qdb_cmd_args, info=args.info)
+            print(result.stdout, end="")  # Print query result to stdout
+            # Only print success message if --info
+            if args.info:
+                print("\nData printed successfully.", file=sys.stderr)
     else:
         # --- Mode: Create/Insert into table ---
         table_name = args.name
-        print(f"i Target table: '{table_name}'", file=sys.stderr)
-
+        # Only print status if --info
+        if args.info:
+            print(f"i Target table: '{table_name}'", file=sys.stderr)
         # 1. Check if table exists (unless dry run)
         exists = False
         if not args.dry_run:
-            exists = check_table_exists(table_name)
-
+            exists = check_table_exists(table_name, info=args.info)  # Pass info flag
         # 2. Create table if it doesn't exist
         create_cmd_str = None
         if not exists:
-            print(f"i Table '{table_name}' does not exist. Will attempt to create it.", file=sys.stderr)
-            try:
+            # Only print status if --info
+            if args.info:
+                print(
+                    f"i Table '{table_name}' does not exist. Will attempt to create it.",
+                    file=sys.stderr,
+                )
+            try:  # Pass info flag
                 create_sql = build_create_statement(
                     table_name,
                     types_to_generate,
                     args.timestamp_col,
-                    args.partitionBy
+                    args.partitionBy,
+                    info=args.info,
                 )
-                create_cmd_str = shlex.join(["qdb-cli"] + qdb_exec_base_cmd + ["-q", create_sql])
-
+                # Construct the full command for dry run display
+                create_full_cmd_dry_run = ["qdb-cli"]
+                if args.info:
+                    create_full_cmd_dry_run.append("--info")
+                create_full_cmd_dry_run.extend(qdb_exec_base_cmd + ["-q", create_sql])
+                create_cmd_str = shlex.join(create_full_cmd_dry_run)
                 if args.dry_run:
                     print("\n--- Dry Run: Command to CREATE table ---")
                     print(create_cmd_str)
                 else:
-                    print(f"Creating table '{table_name}'...", file=sys.stderr)
-                    run_qdb_cli(qdb_exec_base_cmd + ["-q", create_sql]) # Raises on error
-                    print(f"Table '{table_name}' created successfully.", file=sys.stderr)
-
-            except SystemExit: # Catch sys.exit from build_create_statement validation
-                sys.exit(1) # Propagate exit
+                    # Only print status if --info
+                    if args.info:
+                        print(f"Creating table '{table_name}'...", file=sys.stderr)
+                    # Pass info flag
+                    run_qdb_cli(qdb_exec_base_cmd + ["-q", create_sql], info=args.info)
+                    # Only print status if --info
+                    if args.info:
+                        print(
+                            f"Table '{table_name}' created successfully.",
+                            file=sys.stderr,
+                        )
+            except SystemExit:  # Catch sys.exit from build_create_statement validation
+                sys.exit(1)  # Propagate exit
             except Exception as e:
                 print(f"\nError building CREATE statement: {e}", file=sys.stderr)
                 sys.exit(1)
         elif not args.dry_run:
-             print(f"i Table '{table_name}' already exists. Proceeding to insert data.", file=sys.stderr)
-
-
+            # Only print status if --info
+            if args.info:
+                print(
+                    f"i Table '{table_name}' already exists. Proceeding to insert data.",
+                    file=sys.stderr,
+                )
         # 3. Insert data
         insert_cmd_str = None
         try:
             insert_sql = build_insert_statement(table_name, select_list, args.rows)
-            insert_cmd_str = shlex.join(["qdb-cli"] + qdb_exec_base_cmd + ["-q", insert_sql])
-
+            # Construct the full command for dry run display
+            insert_full_cmd_dry_run = ["qdb-cli"]
+            if args.info:
+                insert_full_cmd_dry_run.append("--info")
+            insert_full_cmd_dry_run.extend(qdb_exec_base_cmd + ["-q", insert_sql])
+            insert_cmd_str = shlex.join(insert_full_cmd_dry_run)
             if args.dry_run:
-                 print("\n--- Dry Run: Command to INSERT data ---")
-                 print(insert_cmd_str)
-                 # Also print the create command if it would have run
-                 if not exists and create_cmd_str:
-                      print("\n(Table would have been created first if not dry run)")
+                print("\n--- Dry Run: Command to INSERT data ---")
+                print(insert_cmd_str)
+                # Also print the create command if it would have run
+                if not exists and create_cmd_str:
+                    if args.info:  # Only print extra message if info
+                        print("\n(Table would have been created first if not dry run)")
             else:
-                print(f"Inserting {args.rows} rows into '{table_name}'...", file=sys.stderr)
-                run_qdb_cli(qdb_exec_base_cmd + ["-q", insert_sql]) # Raises on error
-                print(f"Data inserted successfully into '{table_name}'.", file=sys.stderr)
-
+                # Only print status if --info
+                if args.info:
+                    print(
+                        f"Inserting {args.rows} rows into '{table_name}'...",
+                        file=sys.stderr,
+                    )
+                # Pass info flag
+                run_qdb_cli(qdb_exec_base_cmd + ["-q", insert_sql], info=args.info)
+                # Only print status if --info
+                if args.info:
+                    print(
+                        f"Data inserted successfully into '{table_name}'.",
+                        file=sys.stderr,
+                    )
         except Exception as e:
             print(f"\nError building/executing INSERT statement: {e}", file=sys.stderr)
             sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
