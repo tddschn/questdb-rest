@@ -3,7 +3,8 @@ import requests
 import json
 import logging
 from urllib.parse import urlencode, urljoin
-from typing import Optional, Dict, Any, Union, IO, Tuple
+from typing import List, Optional, Dict, Any, Union, IO, Tuple
+from questdb_rest.utils import _qdb_exec_result_dict_extract_field
 
 # --------------------
 # consts
@@ -595,6 +596,76 @@ class QuestDBClient:
             # Handle connection errors etc.
             logger.error(f"Failed to check table existence for '{table_name}': {e}")
             raise  # Re-raise other QuestDB errors
+
+    # questdb_rest/__init__.py
+    def exec_extract_field(
+        self,
+        query: str,
+        field: Union[str, int],
+        limit: Optional[str] = None,
+        count: Optional[bool] = None,
+        nm: Optional[bool] = None,  # skip metadata
+        timings: Optional[bool] = None,
+        explain: Optional[bool] = None,
+        quote_large_num: Optional[bool] = None,
+        statement_timeout: Optional[int] = None,  # in milliseconds
+    ) -> List[Any]:
+        """
+        Executes a SQL query and extracts a specific field from the result set.
+
+        Args:
+            query: The SQL query string to execute.
+            field: The column name (str) or 0-based index (int) to extract.
+            limit: Limit results (e.g., "10", "10,20").
+            count: Include row count in the response (ignored for extraction).
+            nm: Skip metadata section in the response.
+            timings: Include execution timings in the response (ignored for extraction).
+            explain: Include execution plan details in the response (ignored for extraction).
+            quote_large_num: Return LONG numbers as quoted strings.
+            statement_timeout: Query timeout in milliseconds.
+
+        Returns:
+            A list containing the values from the specified column in the dataset.
+
+        Raises:
+            QuestDBError: For API, connection, JSON parsing, or extraction issues.
+            ValueError: If the specified field is not found or invalid.
+            KeyError: If the response format is unexpected.
+            TypeError: If arguments are of the wrong type.
+        """
+        if explain:
+            logger.warning("Ignoring 'explain=True' when using 'exec_extract_field'.")
+            explain = False
+        if count:
+            logger.warning("Ignoring 'count=True' when using 'exec_extract_field'.")
+            count = False
+        if timings:
+            logger.warning("Ignoring 'timings=True' when using 'exec_extract_field'.")
+            timings = False
+
+        # Call the standard exec method first
+        result_dict = self.exec(
+            query=query,
+            limit=limit,
+            nm=nm,
+            quote_large_num=quote_large_num,
+            statement_timeout=statement_timeout,
+            count=False,  # Force count=False
+            timings=False,  # Force timings=False
+            explain=False,  # Force explain=False
+        )
+
+        # Now extract the field using the utility function
+        try:
+            extracted_values = _qdb_exec_result_dict_extract_field(
+                result_dict=result_dict, field=field
+            )
+            return extracted_values
+        except (ValueError, KeyError, TypeError, IndexError) as e:
+            # Re-raise extraction errors as a QuestDBError for consistency
+            msg = f"Failed to extract field '{field}' from query result: {e}"
+            logger.error(msg)
+            raise QuestDBError(msg) from e
 
 
 # Example Usage (can be removed or kept for basic testing)

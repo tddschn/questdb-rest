@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 # PYTHON_ARGCOMPLETE_OK
-
 # --------------------
 # legacy uv run header
 # --------------------
-
 #!/usr/bin/env uv run
 # /// script
 # requires-python = '>=3.11'
@@ -16,11 +14,9 @@
 #     "./questdb_rest.py" # Include the library file as a dependency
 # ]
 # ///
-
 # --------------------
 # imports
 # --------------------
-
 import uuid
 import argparse
 import html
@@ -33,7 +29,6 @@ from pathlib import Path
 from typing import Callable, Tuple
 import os  # ensure os is imported
 import re
-
 import argcomplete
 
 # Import the client and exceptions from the library
@@ -711,13 +706,36 @@ def simulate_exec(args, statement, statement_index, total_statements):
         else None,
     }
     filtered_params = {k: v for k, v in params.items() if v is not None}
-    logger.info(f"[DRY-RUN]   Params: {filtered_params}")
-    headers = {}
-    if args.statement_timeout:
-        headers["Statement-Timeout"] = str(args.statement_timeout)
-        logger.info(f"[DRY-RUN]   Headers: {headers}")
-    # Simulate a DDL OK response for simplicity
-    print(json.dumps({"dry_run": True, "ddl": "OK (Simulated)"}, indent=2))
+    # Modify simulation if --extract-field is used
+    if args.extract_field:
+        logger.info(f"[DRY-RUN]   Mode: Extract Field ('{args.extract_field}')")
+        # Simulate extracted output (one value per line)
+        print("simulated_extracted_value_1")
+        if not args.one:
+            print("simulated_extracted_value_2")
+    else:
+        logger.info("[DRY-RUN]   Mode: Standard Exec")
+        logger.info(f"[DRY-RUN]   Params: {filtered_params}")
+        headers = {}
+        if args.statement_timeout:
+            headers["Statement-Timeout"] = str(args.statement_timeout)
+            logger.info(f"[DRY-RUN]   Headers: {headers}")
+        # Simulate different outputs based on formatting flags
+        if args.markdown or args.psql:
+            fmt = "psql" if args.psql else "github"
+            logger.info(f"[DRY-RUN]   Output: Simulated table ({fmt} format)")
+            print("+-------------------+-------------------+")
+            print("| dry_run_col1      | dry_run_col2      |")
+            print("|-------------------+-------------------|")
+            print("| simulated_val1    | simulated_val2    |")
+            print("+-------------------+-------------------+")
+        elif args.one:
+            logger.info("[DRY-RUN]   Output: Simulated single value")
+            print("simulated_single_value")
+        else:
+            # Default: Simulate a DDL OK response or simple JSON
+            logger.info("[DRY-RUN]   Output: Simulated JSON")
+            print(json.dumps({"dry_run": True, "ddl": "OK (Simulated)"}, indent=2))
 
 
 def simulate_exp(args):
@@ -1087,14 +1105,16 @@ def handle_exec(args, client: QuestDBClient):
         sys.exit(0)
     logger.info(f"Found {len(statements)} statement(s) in {source_description}.")
     any_statement_failed = False
-    json_separator = "\n"  # Separator between JSON outputs for multiple statements
-    markdown_psql_separator = "\n\n"  # Separator for markdown/psql tables
-    output_separator = ""  # Will be set based on output format
     # Determine the separator based on the output format requested
-    if args.markdown or args.psql:
-        output_separator = markdown_psql_separator
-    elif not args.one:  # Default JSON output uses newline
-        output_separator = json_separator
+    # Use newline for JSON, extracted fields, and --one
+    # Use double newline for markdown/psql
+    # No separator needed if only one statement
+    output_separator = ""
+    if len(statements) > 1:
+        if args.markdown or (args.psql and (not args.extract_field)):
+            output_separator = "\n\n"
+        else:
+            output_separator = "\n"
     # 3. Execute Statements Iteratively
     first_output_written = False
     for i, statement in enumerate(statements):
@@ -1117,118 +1137,179 @@ def handle_exec(args, client: QuestDBClient):
             first_output_written = True
             continue  # Skip actual execution
         try:
-            response_json = client.exec(
-                query=statement,
-                limit=args.limit,
-                count=args.count,
-                nm=args.nm,
-                timings=args.timings,
-                explain=args.explain,
-                quote_large_num=args.quoteLargeNum,
-                statement_timeout=args.statement_timeout,
-            )
-            # Check for errors within the JSON response (QuestDB API errors)
-            if isinstance(response_json, dict) and "error" in response_json:
-                logger.error(
-                    f"Error executing statement {i + 1}: {response_json['error']}"
+            # --- Choose execution method ---
+            response_data = None
+            if args.extract_field:
+                # Convert field name to int if it looks like one
+                field_arg = args.extract_field
+                try:
+                    field_identifier: Union[str, int] = int(field_arg)
+                    logger.debug(f"Using field index: {field_identifier}")
+                except ValueError:
+                    field_identifier = field_arg
+                    logger.debug(f"Using field name: {field_identifier}")
+                response_data = client.exec_extract_field(
+                    query=statement,
+                    field=field_identifier,
+                    limit=args.limit,
+                    nm=args.nm,
+                    quote_large_num=args.quoteLargeNum,
+                    statement_timeout=args.statement_timeout,
                 )
-                # Print simplified error to stdout, detailed error already logged by client
-                sys.stderr.write(
-                    f"-- Statement {i + 1} Error --\nError: {response_json['error']}\n"
+                # Check for errors within the extraction process (already logged by client)
+                # The client's exec_extract_field raises QuestDBError on failure
+            else:
+                # Standard execution returning JSON dict
+                response_data = client.exec(
+                    query=statement,
+                    limit=args.limit,
+                    count=args.count,
+                    nm=args.nm,
+                    timings=args.timings,
+                    explain=args.explain,
+                    quote_large_num=args.quoteLargeNum,
+                    statement_timeout=args.statement_timeout,
                 )
-                sys.stderr.write(f"Query: {response_json.get('query', statement)}\n")
-                any_statement_failed = True
-                if args.stop_on_error:
-                    logger.warning(
-                        "Stopping execution due to error (stop-on-error enabled)."
+                # Check for errors within the JSON response (QuestDB API errors)
+                if isinstance(response_data, dict) and "error" in response_data:
+                    logger.error(
+                        f"Error executing statement {i + 1}: {response_data['error']}"
                     )
-                    sys.exit(1)
-                else:
-                    logger.warning("Continuing execution (stop-on-error disabled).")
-                    continue  # Skip to next statement
+                    # Print simplified error to stderr
+                    sys.stderr.write(
+                        f"-- Statement {i + 1} Error --\nError: {response_data['error']}\n"
+                    )
+                    sys.stderr.write(
+                        f"Query: {response_data.get('query', statement)}\n"
+                    )
+                    any_statement_failed = True
+                    if args.stop_on_error:
+                        logger.warning(
+                            "Stopping execution due to error (stop-on-error enabled)."
+                        )
+                        sys.exit(1)
+                    else:
+                        logger.warning("Continuing execution (stop-on-error disabled).")
+                        continue  # Skip to next statement
             # Print separator if this is not the first successful output
             if first_output_written and output_separator:
                 sys.stdout.write(output_separator)
             # --- Handle Output Formatting ---
             output_written_this_statement = False
-            if args.explain_only:
-                if isinstance(response_json, dict) and "dataset" in response_json:
-                    explain_text = explain_output_to_text(response_json)
+            if args.extract_field:
+                # Response is a list of values
+                if isinstance(response_data, list):
+                    if args.one:
+                        if response_data:
+                            print(response_data[0])
+                            output_written_this_statement = True
+                        else:
+                            logger.debug(
+                                f"Statement {i + 1}: --extract-field and --one specified, but result list was empty."
+                            )
+                    else:
+                        for value in response_data:
+                            print(value)
+                        output_written_this_statement = bool(response_data)
+                else:
+                    logger.error(
+                        f"Statement {i + 1}: Expected a list from exec_extract_field, but got {type(response_data)}."
+                    )
+                    # Treat this as a failure
+                    any_statement_failed = True
+                    if args.stop_on_error:
+                        sys.exit(1)
+                    else:
+                        continue
+            elif args.explain_only:
+                if isinstance(response_data, dict) and "dataset" in response_data:
+                    explain_text = explain_output_to_text(response_data)
                     sys.stdout.write(explain_text + "\n")
             elif args.one:
-                if isinstance(response_json, dict) and "dataset" in response_json:
+                if isinstance(response_data, dict) and "dataset" in response_data:
                     if (
-                        len(response_json["dataset"]) > 0
-                        and len(response_json["dataset"][0]) > 0
+                        len(response_data["dataset"]) > 0
+                        and len(response_data["dataset"][0]) > 0
                     ):
-                        sys.stdout.write(f"{response_json['dataset'][0][0]}\n")
+                        sys.stdout.write(f"{response_data['dataset'][0][0]}\n")
                         output_written_this_statement = True
                     else:
                         logger.debug(
                             f"Statement {i + 1}: --one specified, but dataset was empty or lacked rows/columns."
                         )
-                        # Optionally print an empty line or nothing? Let's print nothing.
                 else:
                     logger.debug(
                         f"Statement {i + 1}: --one specified, but response was not a dict or lacked 'dataset'."
                     )
-            elif (
-                (args.markdown or args.psql)
-                and isinstance(response_json, dict)
-                and ("columns" in response_json)
-                and ("dataset" in response_json)
-            ):
-                try:
-                    from tabulate import tabulate
+            elif (args.markdown or args.psql) and isinstance(response_data, dict):
+                if "columns" in response_data and "dataset" in response_data:
+                    try:
+                        from tabulate import tabulate
 
-                    headers = [col["name"] for col in response_json["columns"]]
-                    table = response_json["dataset"]
-                    # Only print table if there are columns and/or data
-                    if headers or table:
-                        fmt = (
-                            "psql" if args.psql else "github"
-                        )  # Default to github if --markdown
-                        md_table = tabulate(table, headers=headers, tablefmt=fmt)
-                        sys.stdout.write(md_table + "\n")
-                        output_written_this_statement = True
-                    else:
-                        logger.debug(
-                            f"Statement {i + 1}: --markdown/psql specified, but no columns or data returned."
+                        headers = [col["name"] for col in response_data["columns"]]
+                        table = response_data["dataset"]
+                        # Only print table if there are columns and/or data
+                        if headers or table:
+                            fmt = (
+                                "psql" if args.psql else "github"
+                            )  # Default to github if --markdown
+                            md_table = tabulate(table, headers=headers, tablefmt=fmt)
+                            sys.stdout.write(md_table + "\n")
+                            output_written_this_statement = True
+                        else:
+                            logger.debug(
+                                f"Statement {i + 1}: --markdown/psql specified, but no columns or data returned."
+                            )
+                    except ImportError:
+                        sys.stderr.write(
+                            "Tabulate library not installed. Please install 'tabulate'. Falling back to JSON.\n"
                         )
-                        # Print empty line? Let's print nothing.
-                except ImportError:
-                    sys.stderr.write(
-                        "Tabulate library not installed. Please install 'tabulate'. Falling back to JSON.\n"
+                        # Fallback to JSON dump if tabulate is missing
+                        json.dump(response_data, sys.stdout, indent=2)
+                        sys.stdout.write("\n")
+                        output_written_this_statement = True
+                    except Exception as tab_err:
+                        # Catch other tabulate errors
+                        logger.error(
+                            f"Error during tabulate formatting for statement {i + 1}: {tab_err}"
+                        )
+                        sys.stderr.write(
+                            f"Error during table formatting: {tab_err}. Falling back to JSON.\n"
+                        )
+                        json.dump(response_data, sys.stdout, indent=2)
+                        sys.stdout.write("\n")
+                        output_written_this_statement = True
+                else:
+                    # Handle cases like simple DDL OK response when markdown/psql is requested
+                    logger.debug(
+                        f"Statement {i + 1}: --markdown/psql requested, but response lacks 'columns' or 'dataset'. Printing raw JSON."
                     )
-                    # Fallback to JSON dump if tabulate is missing
-                    json.dump(response_json, sys.stdout, indent=2)
+                    json.dump(response_data, sys.stdout, indent=2)
                     sys.stdout.write("\n")
                     output_written_this_statement = True
-                except Exception as tab_err:
-                    # Catch other tabulate errors
-                    logger.error(
-                        f"Error during tabulate formatting for statement {i + 1}: {tab_err}"
-                    )
-                    sys.stderr.write(
-                        f"Error during table formatting: {tab_err}. Falling back to JSON.\n"
-                    )
-                    json.dump(response_json, sys.stdout, indent=2)
+            elif isinstance(response_data, dict):
+                # Default: JSON output for non-DDL responses
+                # Only print JSON if it's not just a simple DDL response (like {'ddl': 'OK'})
+                # unless it's the *only* thing in the response.
+                if not (
+                    len(response_data) == 1
+                    and "ddl" in response_data
+                    and (response_data["ddl"] == "OK")
+                ):
+                    json.dump(response_data, sys.stdout, indent=2)
                     sys.stdout.write("\n")
-                    output_written_this_statement = True  # Default: JSON output
-            # Only print JSON if it's not just a simple DDL response (like {'ddl': 'OK'})
-            # unless it's the *only* thing in the response.
-            elif not (
-                len(response_json) == 1
-                and "ddl" in response_json
-                and (response_json["ddl"] == "OK")
-            ):
-                json.dump(response_json, sys.stdout, indent=2)
-                sys.stdout.write("\n")
-                output_written_this_statement = True
+                    output_written_this_statement = True
+                else:
+                    logger.debug(
+                        f"Statement {i + 1}: Suppressing simple DDL OK response in default JSON output."
+                    )
             else:
-                logger.debug(
-                    f"Statement {i + 1}: Suppressing simple DDL OK response in default JSON output."
+                # Fallback for unexpected response types
+                logger.warning(
+                    f"Statement {i + 1}: Received unexpected response data type {type(response_data)}. Printing representation."
                 )
+                print(repr(response_data))
+                output_written_this_statement = True
             if output_written_this_statement:
                 first_output_written = True  # Mark that we have produced output
             logger.info(f"Statement {i + 1} executed successfully.")
@@ -1249,7 +1330,7 @@ def handle_exec(args, client: QuestDBClient):
                 sys.exit(1)
             else:
                 logger.warning("Continuing execution (stop-on-error disabled).")
-        except QuestDBError as e:  # Catch other client errors (connection etc.)
+        except QuestDBError as e:  # Catch other client errors (connection, extraction)
             logger.warning(f"Statement {i + 1} failed: {e}")
             sys.stderr.write(f"-- Statement {i + 1} Error --\nError: {e}\n")
             any_statement_failed = True
@@ -2659,7 +2740,7 @@ def _add_parser_exec(subparsers: argparse._SubParsersAction):
     """Adds arguments for the 'exec' subcommand."""
     parser_exec = subparsers.add_parser(
         "exec",
-        help="Execute SQL statement(s) using /exec (returns JSON).\nReads SQL from --query, --file, --get-query-from-python-module, or stdin.",
+        help="Execute SQL statement(s) using /exec (returns JSON/text).\nReads SQL from --query, --file, --get-query-from-python-module, or stdin.",
         formatter_class=argparse.RawTextHelpFormatter,
         add_help=False,
     )
@@ -2741,25 +2822,34 @@ def _add_parser_exec(subparsers: argparse._SubParsersAction):
     )
     # Inherits global --stop-on-error
     # Output formatting options
-    exec_format_group = parser_exec.add_mutually_exclusive_group()  # Keep -1 for --one
+    # Keep -x for extract-field
+    parser_exec.add_argument(
+        "-x",
+        "--extract-field",
+        metavar="FIELD_NAME_OR_INDEX",
+        help="Extract only the specified column/field (by name or 0-based index) and print each value on a new line. Overrides --markdown/--psql/--count/--timings/--explain.",
+    )
+    exec_format_group = (
+        parser_exec.add_mutually_exclusive_group()
+    )  # Keep -1 for --one (can be combined with -x)
     exec_format_group.add_argument(
         "-1",
         "--one",
         action="store_true",
-        help="Output only the value of the first column of the first row.",
+        help="Output only the value of the first column of the first row (or first value if combined with --extract-field).",
     )  # Keep -m for markdown
     exec_format_group.add_argument(
         "-m",
         "--markdown",
         action="store_true",
-        help="Display query result(s) in Markdown table format using tabulate.",
+        help="Display query result(s) in Markdown table format using tabulate (ignored if --extract-field is used).",
     )
     # Keep -P (uppercase) for psql format, distinct from global -p password
     exec_format_group.add_argument(
         "-P",
         "--psql",
         action="store_true",
-        help="Display query result(s) in PostgreSQL table format using tabulate.",
+        help="Display query result(s) in PostgreSQL table format using tabulate (ignored if --extract-field is used).",
     )
     parser_exec.set_defaults(func=handle_exec)
 
