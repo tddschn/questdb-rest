@@ -6,7 +6,7 @@ Usage: $(basename "$0") [OPTIONS] <table_name>
 Show columns for a QuestDB table, optionally returning only the column names.
 
 Options:
-  -n, --name-only    Return only the column names (runs qdb-get-single-col-values-from-query).
+  -n, --name-only    Return only the column names (runs 'qdb-cli exec -x column').
   -h, --help         Show this help message and exit.
 
 Examples:
@@ -52,9 +52,14 @@ if [[ -z "$TABLE" ]]; then
     exit 1
 fi
 
+# Escape double quotes in table name for the query
+SAFE_TABLE="${TABLE//\"/\\\"}"
+query="show columns from \"${SAFE_TABLE}\""
+
 if [[ $NAME_ONLY -eq 1 ]]; then
-    qdb-get-single-col-values-from-query \
-        "select \"column\" from (show columns from \"${TABLE}\")"
+    # Execute SHOW COLUMNS and extract only the 'column' field
+    qdb-cli exec -q "$query" -x column
 else
-    qdb-cli exec --psql -q "show columns from \"${TABLE}\""
+    # Execute SHOW COLUMNS and display the full result using psql format
+    qdb-cli exec --psql -q "$query"
 fi
