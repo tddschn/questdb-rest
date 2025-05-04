@@ -5,7 +5,8 @@ print_help() {
     cat <<EOF
 Usage: $(basename "$0") [OPTIONS] "<SQL_QUERY>"
 
-Run a single‐column SQL query via qdb-cli, strip header and quotes, and copy the results to the clipboard.
+Run a single‐column SQL query via 'qdb-cli exec -x 0' and copy the results to the clipboard.
+The query MUST return only one column.
 
 OPTIONS:
   -h, --help    Show this help message and exit
@@ -46,9 +47,5 @@ done
 # Join all remaining args into a single SQL query
 query="$*"
 
-# Execute the query, strip header row and quotes, then copy to clipboard
-qdb-cli exp "$query" |
-    tail -n +2 |
-    tr -d '"' | # strip quotes
-    tr -d '\r' |
-    pbcopy
+# Execute the query, extract the first (and assumed only) column (index 0), then copy to clipboard
+qdb-cli exec -q "$query" -x 0 | pbcopy
