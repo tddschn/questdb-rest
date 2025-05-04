@@ -37,4 +37,7 @@ update-python-functions-from-copied-markdown:
 update-python-functions-from-copied-markdown-include:
 	update-python-functions-from-copied-markdown-include-new-defs.sh questdb_rest/cli.py questdb_rest/__init__.py
 
+update-python-functions-from-copied-markdown-include-pypika:
+	update-python-functions-from-copied-markdown-include-new-defs.sh questdb_rest/questdb_table_names_pypika.py
+
 .PHONE: *
