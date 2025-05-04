@@ -20,13 +20,14 @@ from typing import Dict, List, Tuple, Optional
 # Example: since 2020, no nulls
 # Example: 4-16 bytes, no nulls
 # qdb-gen-random-data.py
-
 # Format: 'cli_type_name': (rnd_function_call, sql_data_type)
 # Updated date and timestamp to use fixed end values instead of now()
 # Kept binary as is, display issue might be separate.
 # qdb-gen-random-data.py
-
 # Updated timestamp to use literal strings directly, hoping QuestDB parses them correctly as constants.
+# Simplified date literals
+# Use literal timestamp strings directly
+# Kept as is, display might be CLI issue
 TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "boolean": ("rnd_boolean()", "BOOLEAN"),
     "byte": ("rnd_byte()", "BYTE"),
@@ -39,19 +40,16 @@ TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "string": ("rnd_str(5, 10, 0)", "STRING"),
     "symbol": ("rnd_symbol(4, 1, 5, 0)", "SYMBOL"),
     "varchar": ("rnd_varchar(5, 10, 0)", "VARCHAR"),
-    "date": (
-        "rnd_date('2020-01-01', '2024-12-31', 0)",  # Simplified date literals
-        "DATE",
-    ),
+    "date": ("rnd_date('2020-01-01', '2024-12-31', 0)", "DATE"),
     "timestamp": (
-        # Use literal timestamp strings directly
         "rnd_timestamp('2020-01-01T00:00:00.000000Z', '2024-12-31T23:59:59.999999Z', 0)",
         "TIMESTAMP",
     ),
     "long256": ("rnd_long256()", "LONG256"),
     "uuid": ("rnd_uuid4()", "UUID"),
     "ipv4": ("rnd_ipv4()", "IPV4"),
-    "binary": ("rnd_bin()", "BINARY"),  # Kept as is, display might be CLI issue
+    "binary": ("rnd_bin()", "BINARY"),
+    "geohash": ("rnd_geohash(30)", "GEOGRAPHY"),
 }
 DEFAULT_TYPES = ["float"]
 # --- Helper Functions ---
@@ -212,7 +210,11 @@ def setup_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "-N", "--rows", type=int, default=10, help="Number of rows to generate."
     )
-    parser.add_argument(
+    # Group for type selection
+    type_group = (
+        parser.add_mutually_exclusive_group()
+    )  # Keep default for when -A is not used
+    type_group.add_argument(
         "-t",
         "--types",
         nargs="*",
@@ -220,6 +222,12 @@ def setup_arg_parser() -> argparse.ArgumentParser:
         choices=list(TYPE_MAPPING.keys()),
         metavar="TYPE",
         help=f"Space-separated list of data types to generate. Default: {' '.join(DEFAULT_TYPES)}. Available: {', '.join(TYPE_MAPPING.keys())}",
+    )
+    type_group.add_argument(
+        "-A",
+        "--all-types",
+        action="store_true",
+        help="Generate columns for all available types, ignoring --types.",
     )
     parser.add_argument(
         "-P",
@@ -236,14 +244,12 @@ def setup_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the qdb-cli commands that would be executed, but don't run them.",
     )
-    # Add --info flag
     parser.add_argument(
         "-i",
         "--info",
         action="store_true",
         help="Pass the --info flag to underlying qdb-cli calls for verbose logging.",
     )
-    # Allow passing extra arguments directly to all `qdb-cli exec` calls
     parser.add_argument(
         "qdb_cli_args",
         nargs=argparse.REMAINDER,
@@ -268,18 +274,34 @@ def main():
     if args.rows <= 0:
         print("Error: --rows must be a positive integer.", file=sys.stderr)
         sys.exit(1)
-    # Validate selected types
-    invalid_types = [t for t in args.types if t not in TYPE_MAPPING]
-    if invalid_types:
-        print(
-            f"Error: Invalid type(s) specified: {', '.join(invalid_types)}",
-            file=sys.stderr,
-        )
-        print(f"Available types: {', '.join(TYPE_MAPPING.keys())}", file=sys.stderr)
-        sys.exit(1)
-    # Ensure unique types
-    types_to_generate = sorted(list(set(args.types)))
+    # Determine types to generate
+    if args.all_types:
+        types_to_generate = sorted(list(TYPE_MAPPING.keys()))
+        if args.info:
+            print(
+                f"i --all-types specified. Generating all types: {', '.join(types_to_generate)}",
+                file=sys.stderr,
+            )
+    else:
+        # Validate selected types if --all-types is not used
+        invalid_types = [t for t in args.types if t not in TYPE_MAPPING]
+        if invalid_types:
+            print(
+                f"Error: Invalid type(s) specified: {', '.join(invalid_types)}",
+                file=sys.stderr,
+            )
+            print(f"Available types: {', '.join(TYPE_MAPPING.keys())}", file=sys.stderr)
+            sys.exit(1)
+        # Ensure unique types
+        types_to_generate = sorted(list(set(args.types)))
+        if args.info:
+            print(
+                f"i Generating specified types: {', '.join(types_to_generate)}",
+                file=sys.stderr,
+            )
     if not types_to_generate:
+        # This condition should theoretically not be met if default types exist
+        # or if --all-types is used, but keep as a safeguard.
         print("Error: No data types selected to generate.", file=sys.stderr)
         sys.exit(1)
     # --- Separate qdb-cli connection args from exec args ---
