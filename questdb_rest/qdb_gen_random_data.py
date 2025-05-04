@@ -24,6 +24,9 @@ from typing import Dict, List, Tuple, Optional
 # Format: 'cli_type_name': (rnd_function_call, sql_data_type)
 # Updated date and timestamp to use fixed end values instead of now()
 # Kept binary as is, display issue might be separate.
+# qdb-gen-random-data.py
+
+# Updated timestamp to use literal strings directly, hoping QuestDB parses them correctly as constants.
 TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "boolean": ("rnd_boolean()", "BOOLEAN"),
     "byte": ("rnd_byte()", "BYTE"),
@@ -37,17 +40,18 @@ TYPE_MAPPING: Dict[str, Tuple[str, str]] = {
     "symbol": ("rnd_symbol(4, 1, 5, 0)", "SYMBOL"),
     "varchar": ("rnd_varchar(5, 10, 0)", "VARCHAR"),
     "date": (
-        "rnd_date(to_date('2020-01-01', 'yyyy-MM-dd'), to_date('2024-12-31', 'yyyy-MM-dd'), 0)",
+        "rnd_date('2020-01-01', '2024-12-31', 0)",  # Simplified date literals
         "DATE",
-    ),  # Fixed end date
+    ),
     "timestamp": (
-        "rnd_timestamp(to_timestamp('2020-01-01T00:00:00.000Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ'), to_timestamp('2024-12-31T23:59:59.999Z', 'yyyy-MM-ddTHH:mm:ss.SSSUUUZ'), 0)",
+        # Use literal timestamp strings directly
+        "rnd_timestamp('2020-01-01T00:00:00.000000Z', '2024-12-31T23:59:59.999999Z', 0)",
         "TIMESTAMP",
-    ),  # Fixed end timestamp
+    ),
     "long256": ("rnd_long256()", "LONG256"),
     "uuid": ("rnd_uuid4()", "UUID"),
     "ipv4": ("rnd_ipv4()", "IPV4"),
-    "binary": ("rnd_bin(4, 16, 0)", "BINARY"),
+    "binary": ("rnd_bin()", "BINARY"),  # Kept as is, display might be CLI issue
 }
 DEFAULT_TYPES = ["float"]
 # --- Helper Functions ---
