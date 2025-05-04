@@ -8,6 +8,8 @@ usage() {
     cat <<EOF
 Usage: $0 [-n] [-c] -p PATTERN
 
+Drop QuestDB tables matching a regex pattern.
+
 Options:
   -p PATTERN   Regex pattern to match table names (required)
   -n           Dry run; show what would be dropped but do not execute
@@ -46,9 +48,10 @@ if [[ -z $PATTERN ]]; then
     usage
 fi
 
-# Fetch matching tables (skip header)
-mapfile -t TABLES < <(qdb-cli exp "select table_name from tables where table_name ~ '$PATTERN'" |
-    tail -n +2)
+# Fetch matching tables using exec -x
+# Note: Ensure the query properly quotes the pattern if needed, though QuestDB's ~ operator usually handles it.
+QUERY="select table_name from tables where table_name ~ '$PATTERN'"
+mapfile -t TABLES < <(qdb-cli exec -q "$QUERY" -x table_name)
 
 if [[ ${#TABLES[@]} -eq 0 ]]; then
     echo "No tables found matching pattern: $PATTERN"
@@ -57,6 +60,9 @@ fi
 
 # Process each table
 for tbl in "${TABLES[@]}"; do
+    # Basic quoting for the DROP TABLE statement (escape single quotes)
+    SAFE_TBL="${tbl//\'/\'\'}"
+
     if $DRY_RUN; then
         echo "[DRY RUN] Would drop: $tbl"
         continue
@@ -74,5 +80,6 @@ for tbl in "${TABLES[@]}"; do
     fi
 
     echo "Dropping: $tbl"
-    qdb-cli exec -q "drop table $tbl"
+    # Use the safely quoted table name in the DROP command
+    qdb-cli exec -q "drop table '$SAFE_TBL'"
 done
