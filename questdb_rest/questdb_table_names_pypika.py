@@ -3,265 +3,380 @@
 import argparse
 import subprocess
 import sys
-import re
-from typing import List, Optional, Sequence
+from typing import List, Optional, Tuple
 
-from pypika import Query, Table, Field, Order, Criterion
-from pypika import functions as fn
-from pypika.terms import LiteralValue # To use Criterion.raw for regex
+# Attempt to import pypika, provide guidance if missing
+try:
+    from pypika import (
+        Criterion,
+        Field,
+        Order,
+        Query,
+        Table,
+        functions as fn,
+    )
+    from pypika.queries import QueryBuilder
+    from pypika.terms import PseudoColumn, LiteralValue
+except ImportError:
+    print(
+        "Error: pypika library not found. Please install it: pip install pypika",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 
 # --- Constants ---
+# Regex matching UUID-4 with either dashes or underscores (same as bash)
 UUID_REGEX = r"[0-9a-f]{8}([-_][0-9a-f]{4}){3}[-_][0-9a-f]{12}"
-KNOWN_TABLES_COLS = [
-    "id", "table_name", "designatedTimestamp", "partitionBy",
-    "maxUncommittedRows", "o3MaxLag", "walEnabled", "directoryName",
-    "dedup", "ttlValue", "ttlUnit", "matView"
-]
-PARTITION_BY_CHOICES = ['NONE', 'YEAR', 'MONTH', 'DAY', 'HOUR', 'WEEK']
 
-# --- Argument Parser ---
-def build_parser() -> argparse.ArgumentParser:
+# Known columns in the 'tables()' function result for validation
+KNOWN_TABLES_COLS = [
+    "id",
+    "table_name",  # Changed from name for clarity with Field name
+    "designatedTimestamp",
+    "partitionBy",
+    "maxUncommittedRows",
+    "o3MaxLag",
+    "walEnabled",
+    "directoryName",
+    "dedup",
+    "ttlValue",
+    "ttlUnit",
+    "matView",
+]
+
+PARTITION_OPTIONS = ["NONE", "YEAR", "MONTH", "DAY", "HOUR", "WEEK"]
+
+# --- Argument Parsing ---
+
+
+def setup_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Get a list of table names or full table info from QuestDB, with filtering and sorting options.",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog="""Examples:
   # list all table names (default order)
-  %(prog)s
+  {prog}
 
   # list tables NOT matching 'backup_'
-  %(prog)s -v backup_
+  {prog} -v backup_
 
   # list tables partitioned by YEAR or MONTH
-  %(prog)s -P YEAR,MONTH
+  {prog} -P YEAR,MONTH
 
   # list WAL tables with deduplication enabled and a designated timestamp
-  %(prog)s -d -t
+  {prog} -d -t
 
   # show full info for tables starting with 'trade', partitioned by DAY
-  %(prog)s -f -P DAY trades_
+  {prog} -f -P DAY trades_
 
   # show full info for tables matching 'schwab' with length >= 10 (options after regex)
-  %(prog)s schwab -l 10 -f
+  {prog} schwab -l 10 -f
 
   # list tables matching 'schwab' that have no designated timestamp
-  %(prog)s schwab -T
+  {prog} schwab -T
 
   # list tables sorted by name descending, limit 10
-  %(prog)s -s table_name -r -n 10
-"""
+  {prog} -s table_name -r -n 10
+""".format(
+            prog="qdb-table-names.py"
+        ),  # Use python script name
     )
 
-    # Positional Argument
+    # --- Filtering Options ---
     parser.add_argument(
         "regex",
         nargs="?",
-        help="Optional positional argument: Regex pattern to match table names (uses '~')."
+        help="Optional positional argument: Regex pattern to match table names (uses '~').",
+    )
+    parser.add_argument(
+        "-v",
+        "--inverse-match",
+        action="store_true",
+        help="Use inverse regex match ('!~') for the positional regex.",
     )
 
-    # Filtering Options
-    filter_group = parser.add_argument_group("Filtering Options")
-    filter_group.add_argument(
-        "-v", "--inverse-match",
-        action="store_true",
-        help="Use inverse regex match ('!~') for the positional regex."
-    )
-    uuid_group = filter_group.add_mutually_exclusive_group()
+    uuid_group = parser.add_mutually_exclusive_group()
     uuid_group.add_argument(
-        "-u", "--uuid",
+        "-u",
+        "--uuid",
         action="store_true",
-        help="Only tables containing a UUID-4 in their name."
+        help="Only tables containing a UUID-4 in their name.",
     )
     uuid_group.add_argument(
-        "-U", "--no-uuid",
+        "-U",
+        "--no-uuid",
         action="store_true",
-        help="Only tables NOT containing a UUID-4 in their name."
+        help="Only tables NOT containing a UUID-4 in their name.",
     )
-    filter_group.add_argument(
-        "-P", "--partitionBy",
+
+    parser.add_argument(
+        "-P",
+        "--partitionBy",
         metavar="P",
-        help=f"Filter by partitioning strategy. P is a comma-separated list "
-             f"(no spaces) of values like {','.join(PARTITION_BY_CHOICES)}. "
-             f"Example: -P YEAR,MONTH"
-    )
-    ts_group = filter_group.add_mutually_exclusive_group()
-    ts_group.add_argument(
-        "-t", "--has-designated-timestamp",
-        action="store_true",
-        help="Only tables that have a designated timestamp column."
-    )
-    ts_group.add_argument(
-        "-T", "--no-designated-timestamp",
-        action="store_true",
-        help="Only tables that do NOT have a designated timestamp column."
-    )
-    dedup_group = filter_group.add_mutually_exclusive_group()
-    dedup_group.add_argument(
-        "-d", "--dedup-enabled",
-        action="store_true",
-        help="Only tables with deduplication enabled."
-    )
-    dedup_group.add_argument(
-        "-D", "--dedup-disabled",
-        action="store_true",
-        help="Only tables with deduplication disabled."
-    )
-    filter_group.add_argument(
-        "-l", "--min-length",
-        type=int,
-        metavar="N",
-        help="Only tables with name length >= N."
-    )
-    filter_group.add_argument(
-        "-L", "--max-length",
-        type=int,
-        metavar="N",
-        help="Only tables with name length <= N."
+        help="Filter by partitioning strategy. P is a comma-separated list "
+        f"(no spaces) of values like {','.join(PARTITION_OPTIONS)}. Example: -P YEAR,MONTH",
     )
 
-    # Sorting & Limiting
-    sort_limit_group = parser.add_argument_group("Sorting & Limiting")
-    sort_limit_group.add_argument(
-        "-s", "--sort",
+    ts_group = parser.add_mutually_exclusive_group()
+    ts_group.add_argument(
+        "-t",
+        "--has-designated-timestamp",
+        action="store_true",
+        help="Only tables that have a designated timestamp column.",
+    )
+    ts_group.add_argument(
+        "-T",
+        "--no-designated-timestamp",
+        action="store_true",
+        help="Only tables that do NOT have a designated timestamp column.",
+    )
+
+    dedup_group = parser.add_mutually_exclusive_group()
+    dedup_group.add_argument(
+        "-d",
+        "--dedup-enabled",
+        action="store_true",
+        help="Only tables with deduplication enabled.",
+    )
+    dedup_group.add_argument(
+        "-D",
+        "--dedup-disabled",
+        action="store_true",
+        help="Only tables with deduplication disabled.",
+    )
+
+    parser.add_argument(
+        "-l", "--min-length", type=int, help="Only tables with name length >= N."
+    )
+    parser.add_argument(
+        "-L", "--max-length", type=int, help="Only tables with name length <= N."
+    )
+
+    # --- Sorting & Limiting ---
+    parser.add_argument(
+        "-s",
+        "--sort",
         nargs="?",
-        const="table_name", # Value if flag is present without arg
-        default=None,       # Value if flag is not present
+        const="table_name",  # Default value if -s is present without an argument
         metavar="COL",
-        help=f"Sort results by column COL. Defaults to 'table_name' if COL is omitted. "
-             f"Available: {', '.join(KNOWN_TABLES_COLS)}. "
-             f"If -s is not used, results are typically ordered by 'id'."
+        help="Sort results by column COL. Defaults to 'table_name' if COL is omitted. "
+        f"Available columns: {', '.join(KNOWN_TABLES_COLS)}. "
+        "If -s is not used, results are typically ordered by 'id'.",
     )
-    sort_limit_group.add_argument(
-        "-r", "--reverse",
+    parser.add_argument(
+        "-r",
+        "--reverse",
         action="store_true",
-        help="Reverse the sort order (requires -s). Appends DESC to ORDER BY."
+        help="Reverse the sort order (requires -s). Appends DESC to ORDER BY.",
     )
-    sort_limit_group.add_argument(
-        "-n", "--limit",
+    parser.add_argument(
+        "-n",
+        "--limit",
         type=int,
         metavar="N",
-        help="Limit the number of results returned. Passes '-l N' to qdb-cli."
+        help="Limit the number of results returned. Passes '-l N' to qdb-cli.",
     )
 
-    # Output Options
-    output_group = parser.add_argument_group("Output Options")
-    output_group.add_argument(
-        "-f", "--full-cols",
+    # --- Output Options ---
+    parser.add_argument(
+        "-f",
+        "--full-cols",
         action="store_true",
         help="Show all columns from the 'tables' table in PSQL format. "
-             "(Default: shows only table names, one per line)"
+        "(Default: shows only table names, one per line)",
     )
 
     return parser
 
-# --- Main Execution ---
-def main():
-    parser = build_parser()
-    args = parser.parse_args()
 
-    # --- Argument Validation ---
-    if args.reverse and args.sort is None:
-        parser.error("-r/--reverse requires -s/--sort to be specified.")
+# --- Helper to validate arguments after parsing ---
+def validate_args(args: argparse.Namespace):
+    if args.reverse and not args.sort:
+        print(
+            "Error: -r|--reverse requires -s|--sort to be specified.", file=sys.stderr
+        )
+        sys.exit(1)
 
-    if args.sort is not None and args.sort not in KNOWN_TABLES_COLS:
-        parser.error(f"Invalid sort column '{args.sort}'. "
-                     f"Available columns: {', '.join(KNOWN_TABLES_COLS)}")
+    if args.sort and args.sort not in KNOWN_TABLES_COLS:
+        print(f"Error: Invalid sort column '{args.sort}'.", file=sys.stderr)
+        print(
+            f"Available columns: {', '.join(KNOWN_TABLES_COLS)}",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
-    partition_by_filters = []
     if args.partitionBy:
-        partition_by_filters = args.partitionBy.split(',')
-        for p_val in partition_by_filters:
-            if p_val.upper() not in PARTITION_BY_CHOICES:
-                 parser.error(f"Invalid partitionBy value '{p_val}'. "
-                              f"Choices: {', '.join(PARTITION_BY_CHOICES)}")
+        partitions = args.partitionBy.split(",")
+        invalid_partitions = [
+            p for p in partitions if p.strip().upper() not in PARTITION_OPTIONS
+        ]
+        if invalid_partitions:
+            print(
+                f"Error: Invalid partitionBy value(s): {','.join(invalid_partitions)}",
+                file=sys.stderr,
+            )
+            print(f"Available options: {','.join(PARTITION_OPTIONS)}", file=sys.stderr)
+            sys.exit(1)
 
-    # --- Build Pypika Query ---
-    tables_table = Table("tables") # Represents the tables() function/table
-    query = Query.from_(tables_table)
 
-    # Select columns
-    if args.full_cols:
-        query = query.select(tables_table.star)
-    else:
-        query = query.select(tables_table.table_name)
+# --- Build the SQL query string ---
+def build_sql_query(args: argparse.Namespace) -> str:
+    # Use PseudoColumn for 'tables' as it's a function call in QuestDB SQL
+    tables_func = PseudoColumn("tables()")
+    # Treat the result like a table for selection/filtering/ordering
+    tables_table = Table("tables")  # PyPika needs a Table object here
 
-    # Build WHERE conditions
-    conditions: List[Criterion] = []
+    # Start building the query with SELECT and FROM
+    query = Query.from_(tables_func).select(
+        tables_table.star if args.full_cols else tables_table.table_name
+    )
 
+    # --- Build WHERE Clause ---
+    # Collect conditions supported directly by PyPika
+    pypika_conditions: List[Criterion] = []
+
+    # Partition By Filter
+    if args.partitionBy:
+        partitions = [p.strip().upper() for p in args.partitionBy.split(",")]
+        if partitions:
+            pypika_conditions.append(tables_table.partitionBy.isin(partitions))
+
+    # Designated Timestamp Filter
+    if args.has_designated_timestamp:
+        pypika_conditions.append(tables_table.designatedTimestamp.isnotnull())
+    elif args.no_designated_timestamp:
+        pypika_conditions.append(tables_table.designatedTimestamp.isnull())
+
+    # Deduplication Filter
+    if args.dedup_enabled:
+        pypika_conditions.append(tables_table.dedup == True)
+    elif args.dedup_disabled:
+        pypika_conditions.append(tables_table.dedup == False)
+
+    # Length Filters
+    if args.min_length is not None:
+        pypika_conditions.append(fn.Length(tables_table.table_name) >= args.min_length)
+    if args.max_length is not None:
+        pypika_conditions.append(fn.Length(tables_table.table_name) <= args.max_length)
+
+    # Apply PyPika conditions if any exist
+    if pypika_conditions:
+        query = query.where(Criterion.all(pypika_conditions))
+
+    # Collect conditions requiring raw SQL strings
+    raw_sql_conditions: List[str] = []
+
+    # Regex Filter
     if args.regex:
         operator = "!~" if args.inverse_match else "~"
-        # Escape single quotes for SQL string literal
+        # Basic escaping for single quotes in the pattern
         safe_regex = args.regex.replace("'", "''")
-        # Use Criterion.raw as pypika doesn't have built-in regex operators
-        conditions.append(Criterion.raw(f"table_name {operator} '{safe_regex}'"))
+        # Use the column name directly in the raw string
+        raw_sql_conditions.append(f"table_name {operator} '{safe_regex}'")
 
+    # UUID Filter
     if args.uuid:
-        conditions.append(Criterion.raw(f"table_name ~ '{UUID_REGEX}'"))
+        raw_sql_conditions.append(f"table_name ~ '{UUID_REGEX}'")
     elif args.no_uuid:
-        conditions.append(Criterion.raw(f"table_name !~ '{UUID_REGEX}'"))
+        raw_sql_conditions.append(f"table_name !~ '{UUID_REGEX}'")
 
-    if partition_by_filters:
-        # Case-insensitive comparison is safer if DB supports it, otherwise uppercase
-        conditions.append(tables_table.partitionBy.isin([p.upper() for p in partition_by_filters]))
-
-    if args.has_designated_timestamp:
-        conditions.append(tables_table.designatedTimestamp.notnull())
-    elif args.no_designated_timestamp:
-        conditions.append(tables_table.designatedTimestamp.isnull())
-
-    if args.dedup_enabled:
-        conditions.append(tables_table.dedup.eq(True))
-    elif args.dedup_disabled:
-        conditions.append(tables_table.dedup.eq(False))
-
-    if args.min_length is not None:
-        conditions.append(fn.Length(tables_table.table_name) >= args.min_length)
-    if args.max_length is not None:
-        conditions.append(fn.Length(tables_table.table_name) <= args.max_length)
-
-    # Apply combined conditions
-    if conditions:
-        # Combine all conditions with AND
-        combined_criterion = conditions[0]
-        for next_criterion in conditions[1:]:
-            combined_criterion &= next_criterion
-        query = query.where(combined_criterion)
-
-    # Apply sorting
-    if args.sort:
-        sort_order = Order.desc if args.reverse else Order.asc
-        # Pypika handles quoting if necessary based on Field name
-        query = query.orderby(Field(args.sort), order=sort_order)
-
-    # --- Build qdb-cli Command ---
+    # Get the SQL string generated by PyPika so far
+    # Use get_sql() for consistency, though str() often works
     sql_string = query.get_sql()
 
-    command: List[str] = ["qdb-cli", "exec", "-q", sql_string]
+    # Append raw SQL conditions if any exist
+    if raw_sql_conditions:
+        raw_sql_part = " AND ".join(raw_sql_conditions)
+        if query._wheres:  # Check if PyPika already added a WHERE clause
+            # Append using AND
+            sql_string += f" AND ({raw_sql_part})"
+        else:
+            # Add a new WHERE clause
+            sql_string += f" WHERE {raw_sql_part}"
 
-    if args.limit is not None:
-        command.extend(["-l", str(args.limit)])
+    # Apply ORDER BY (append manually as well for simplicity)
+    if args.sort:
+        # Quote the sort column name for safety (PyPika's Field doesn't quote automatically here)
+        sort_col_sql = LiteralValue(args.sort).get_sql(quote_char='"')
+        order_by_clause = f" ORDER BY {sort_col_sql}"
+        if args.reverse:
+            order_by_clause += " DESC"
+        sql_string += order_by_clause
+
+    # --- Post-processing for QuestDB syntax ---
+    # Pypika doesn't quote function calls like tables(), remove quotes manually
+    sql_string = sql_string.replace('"tables()"', "tables()")
+    # Pypika might quote fields from the pseudo-table 'tables', remove those too
+    sql_string = sql_string.replace('"tables".', "")
+
+    return sql_string
+
+
+# --- Build the qdb-cli command list ---
+def build_cli_command(args: argparse.Namespace, sql_query: str) -> List[str]:
+    cmd = ["qdb-cli", "exec", "-q", sql_query]
 
     if args.full_cols:
-        command.append("--psql")
+        cmd.append("--psql")
     else:
-        command.extend(["-x", "table_name"])
+        # If only showing names, extract that column via qdb-cli
+        cmd.extend(["-x", "table_name"])
 
-    # --- Execute Command ---
-    # print(f"Executing: {' '.join(command)}", file=sys.stderr) # Optional debug
+    if args.limit is not None:
+        cmd.extend(["-l", str(args.limit)])
+
+    return cmd
+
+
+# --- Run the command ---
+def run_command(command: List[str]):
     try:
-        # Run and let qdb-cli print directly to stdout/stderr
-        # check=True raises CalledProcessError if qdb-cli returns non-zero
-        process = subprocess.run(command, check=True, text=True)
+        # Set encoding for reliable text processing
+        result = subprocess.run(
+            command,
+            check=True,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace", # Handle potential decoding errors
+        )
+        # Print stdout (the actual results)
+        print(result.stdout, end="")
+        # Print stderr (logs, warnings) to stderr
+        if result.stderr:
+            print(result.stderr, file=sys.stderr, end="")
 
-    except FileNotFoundError:
-        print("Error: 'qdb-cli' command not found. Is it installed and in your PATH?", file=sys.stderr)
-        sys.exit(1)
     except subprocess.CalledProcessError as e:
-        # qdb-cli likely printed its own error message to stderr already
-        print(f"Error executing qdb-cli: {e}", file=sys.stderr)
+        print(f"Error executing command: {' '.join(command)}", file=sys.stderr)
+        print(f"Return Code: {e.returncode}", file=sys.stderr)
+        if e.stdout:
+            print(f"stdout:\n{e.stdout}", file=sys.stderr)
+        if e.stderr:
+            print(f"stderr:\n{e.stderr}", file=sys.stderr)
         sys.exit(e.returncode)
+    except FileNotFoundError:
+        print("Error: 'qdb-cli' command not found.", file=sys.stderr)
+        print("Please ensure it's installed and in your PATH.", file=sys.stderr)
+        sys.exit(1)
     except Exception as e:
         print(f"An unexpected error occurred: {e}", file=sys.stderr)
         sys.exit(1)
+
+
+# --- Main Execution ---
+def main():
+    parser = setup_arg_parser()
+    args = parser.parse_args()
+    validate_args(args)
+
+    sql_query = build_sql_query(args)
+    cli_command = build_cli_command(args, sql_query)
+
+    # Optional: Print the command for debugging
+    # print(f"Executing: {' '.join(cli_command)}", file=sys.stderr)
+
+    run_command(cli_command)
+
 
 if __name__ == "__main__":
     main()
