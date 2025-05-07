@@ -31,6 +31,7 @@ def setup_arg_parser() -> argparse.ArgumentParser:
         description=f"Search a symbols table (default: '{DEFAULT_TABLE_NAME}') in QuestDB using qdb-cli and pypika.",
         formatter_class=argparse.RawTextHelpFormatter,
         epilog=f"""This script is for self use only, it won't work for you unless you have the same db as mine.
+
   Examples:
   # Search for 'spy' (case-insensitive) in the 'ticker' field of '{DEFAULT_TABLE_NAME}'
   {sys.argv[0]} spy
