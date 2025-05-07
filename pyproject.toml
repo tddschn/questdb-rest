@@ -28,6 +28,9 @@ qdb-imp-from-stdin = { reference = "scripts/qdb-imp-from-stdin", type = "file" }
 qdb-copy-single-col-values-from-query = { reference = "scripts/qdb-copy-single-col-values-from-query", type = "file" }
 qdb-get-single-col-values-from-query = { reference = "scripts/qdb-get-single-col-values-from-query", type = "file" }
 
+# for self use only, only works for my dbs
+qdbtvs = "questdb_rest.qdb_tv_symbols_search:main"
+
 [tool.poetry.urls]
 "Bug Tracker" = "https://github.com/tddschn/questdb-rest/issues"
 
