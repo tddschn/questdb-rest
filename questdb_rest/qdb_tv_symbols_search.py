@@ -60,12 +60,14 @@ def setup_arg_parser() -> argparse.ArgumentParser:
         help="The term/pattern to search for. Treated as a regex pattern for QuestDB's '~' operator.",
     )
     parser.add_argument(
+        "-F",
         "--field",
         choices=["ticker", "full"],
         default="ticker",
         help="Field to search in (default: ticker).",
     )
     parser.add_argument(
+        "-I",
         "--case-sensitive",
         action="store_true",
         help="Perform a case-sensitive search (default is case-insensitive).",
