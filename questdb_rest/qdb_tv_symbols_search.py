@@ -1,21 +1,15 @@
 #!/usr/bin/env python3
-# qdb-search-symbols.py
+# qdb_search_tv_symbols.py
 
 import argparse
 import subprocess
 import sys
 import shlex
-from typing import List, Dict, Any, Optional
+from typing import List, Optional
 
-# Attempt to import pypika, provide guidance if missing
 try:
-    from pypika import (
-        Query,
-        Table,
-        Field,
-        Criterion,
-    )  # functions as fn (fn not used in this version)
-    # LiteralValue is not needed with the string-appending approach for raw conditions
+    from pypika import Query, Table, Field, Criterion, functions as fn
+    from pypika.terms import LiteralValue
 except ImportError:
     print(
         "Error: pypika library not found. Please install it: pip install pypika",
@@ -23,297 +17,188 @@ except ImportError:
     )
     sys.exit(1)
 
-DEFAULT_TABLE_NAME = "tv_symbols_us"
 
-
+# --- Argument Parsing ---
 def setup_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description=f"Search a symbols table (default: '{DEFAULT_TABLE_NAME}') in QuestDB using qdb-cli and pypika.",
+        description="Search the tv_symbols_us table in QuestDB using pypika and qdb-cli.",
         formatter_class=argparse.RawTextHelpFormatter,
-        epilog=f"""This script is for self use only, it won't work for you unless you have the same db as mine.
+        epilog="""Examples:
+  # Case-insensitive search for 'spy' in the ticker field
+  %(prog)s spy
 
-  Examples:
-  # Search for 'spy' (case-insensitive) in the 'ticker' field of '{DEFAULT_TABLE_NAME}'
-  {sys.argv[0]} spy
+  # Case-insensitive search for 'apple' in the full field
+  %(prog)s -f apple
 
-  # Search for 'SPDR' (case-insensitive) in the 'full' field
-  {sys.argv[0]} SPDR --field full
+  # Search for 'goog' in ticker, filtered by NASDAQ and NYSE namespaces
+  %(prog)s goog -N NASDAQ NYSE
 
-  # Search for 'SPY' (case-sensitive) in the 'ticker' field
-  {sys.argv[0]} SPY --case-sensitive
-
-  # Search for 'BTC' (case-insensitive) in 'ticker', filter by 'BINANCE' and 'COINBASE' namespaces
-  {sys.argv[0]} BTC -n BINANCE COINBASE
-
-  # Search in a different table
-  {sys.argv[0]} mypattern --table-name other_symbols_table
-
-  # Dry run the command
-  {sys.argv[0]} aapl --dry-run
-
-  # Pass connection arguments to qdb-cli
-  {sys.argv[0]} tsla --host my.questdb.instance --port 9001
+  # Dry run search for 'tsla' with --info for qdb-cli, and custom host
+  %(prog)s tsla --dry-run --info --host myquestdb.local
 """,
     )
+
     parser.add_argument(
-        "search_term",
-        help="The term/pattern to search for. Treated as a regex pattern for QuestDB's '~' operator.",
+        "search_query",
+        help="The string to search for.",
     )
     parser.add_argument(
-        "-F",
-        "--field",
-        choices=["ticker", "full"],
-        default="ticker",
-        help="Field to search in (default: ticker).",
-    )
-    parser.add_argument(
-        "-I",
-        "--case-sensitive",
+        "-f",
+        "--full",
         action="store_true",
-        help="Perform a case-sensitive search (default is case-insensitive).",
+        help="Search in the 'full' field instead of the 'ticker' field.",
     )
     parser.add_argument(
-        "-n",
+        "-N",
         "--namespaces",
         nargs="*",
-        default=[],
         metavar="NAMESPACE",
+        default=[],
         help="Filter by one or more namespaces (e.g., AMEX NASDAQ).",
-    )
-    parser.add_argument(
-        "--table-name",
-        default=DEFAULT_TABLE_NAME,
-        help=f"Name of the table to search (default: {DEFAULT_TABLE_NAME}).",
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Print the qdb-cli command instead of executing it.",
     )
     parser.add_argument(
         "-i",
         "--info",
         action="store_true",
-        help="Pass the --info flag to qdb-cli for verbose logging, and enable verbose script logging.",
+        help="Pass the --info flag to underlying qdb-cli calls for its verbose logging.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the qdb-cli command that would be executed, but don't run it.",
     )
     parser.add_argument(
         "qdb_cli_args",
         nargs=argparse.REMAINDER,
-        help="Remaining arguments are passed directly to `qdb-cli` (e.g., --host, --port, auth details). Place these *after* script-specific options.",
+        help="Remaining arguments are passed directly as global options to `qdb-cli` (e.g., --host, --port). Place these *after* script-specific options.",
     )
     return parser
 
 
+# --- SQL Query Building ---
 def build_sql_query(args: argparse.Namespace) -> str:
-    """Builds the SQL query string using pypika."""
+    tv_symbols_us = Table("tv_symbols_us")
 
-    target_table = Table(args.table_name)
-    # PyPika automatically quotes table and field names with double quotes.
-    query_builder = Query.from_(target_table).select(
-        target_table.namespace, target_table.ticker, target_table.full
+    # Select specific columns as shown in the user's example output
+    query_builder = Query.from_(tv_symbols_us).select(
+        tv_symbols_us.namespace, tv_symbols_us.ticker, tv_symbols_us.full
     )
 
-    pypika_conditions = []
-    raw_sql_conditions = []
+    conditions = []
 
-    # Prepare search term and field expression for raw SQL
-    # Escape single quotes in the user-provided search term for SQL literal
-    search_pattern_escaped = args.search_term.replace("'", "''")
-    # Field name for raw SQL must be explicitly double-quoted if it needs to be case-sensitive
-    # or contains special characters. PyPika does this by default for its Field objects.
-    # For raw SQL, we ensure it's double-quoted.
-    field_to_search_in_raw_sql = f'"{args.field}"'
+    # Prepare search value: uppercase and escape single quotes for the SQL pattern literal
+    search_value_pattern = args.search_query.upper().replace("'", "''")
 
-    if args.case_sensitive:
-        # QuestDB's ~ operator is case-sensitive by default
-        raw_sql_conditions.append(
-            f"{field_to_search_in_raw_sql} ~ '{search_pattern_escaped}'"
-        )
+    if args.full:
+        # Case-insensitive search on 'full' field using "UPPER(column) ~ 'UPPER_PATTERN'"
+        # fn.Upper(Field) generates UPPER("column_name") which is correct for QuestDB
+        field_expr_sql = fn.Upper(tv_symbols_us.full).get_sql(quote_char='"')
+        conditions.append(LiteralValue(f"{field_expr_sql} ~ '{search_value_pattern}'"))
     else:
-        # For case-insensitive, apply UPPER to both field and pattern in raw SQL
-        # The pattern should also be uppercased.
-        pattern_uppercase_escaped = search_pattern_escaped.upper()
-        raw_sql_conditions.append(
-            f"UPPER({field_to_search_in_raw_sql}) ~ '{pattern_uppercase_escaped}'"
-        )
+        # Default: Case-insensitive search on 'ticker' field
+        field_expr_sql = fn.Upper(tv_symbols_us.ticker).get_sql(quote_char='"')
+        conditions.append(LiteralValue(f"{field_expr_sql} ~ '{search_value_pattern}'"))
 
-    # Namespace filtering (can be handled by PyPika's `isin`)
     if args.namespaces:
-        # target_table.namespace will be correctly quoted by PyPika (e.g., "namespace")
-        # PyPika's isin method correctly quotes string literals in the list.
-        pypika_conditions.append(target_table.namespace.isin(args.namespaces))
+        # pypika's isin handles quoting of values if they are string literals,
+        # resulting in "namespace" IN ('VAL1', 'VAL2')
+        conditions.append(tv_symbols_us.namespace.isin(args.namespaces))
 
-    # Apply PyPika-native conditions first
-    if pypika_conditions:
-        query_builder = query_builder.where(Criterion.all(pypika_conditions))
+    if conditions:
+        # Criterion.all combines all conditions with AND
+        query_builder = query_builder.where(Criterion.all(conditions))
 
-    # Get the SQL string built so far by PyPika
-    sql_string = query_builder.get_sql()  # Using get_sql() is preferred over str()
-
-    # Append raw SQL conditions
-    if raw_sql_conditions:
-        raw_sql_part = " AND ".join(raw_sql_conditions)
-        # Check if PyPika already added a WHERE clause
-        if " WHERE " in sql_string.upper():
-            # Append using AND. Parenthesize the raw part for safety.
-            sql_string += f" AND ({raw_sql_part})"
-        else:
-            # Add a new WHERE clause
-            sql_string += f" WHERE {raw_sql_part}"
-
-    # Adding a semicolon for QuestDB convention.
-    return sql_string + ";"
+    # Add semicolon for QuestDB convention
+    sql_str = query_builder.get_sql(quote_char='"') + ";"
+    return sql_str
 
 
-def parse_qdb_cli_remainder_args(remainder_args: List[str]) -> (List[str], List[str]):
-    """
-    Parses remainder arguments into connection-related and other passthrough args.
-    This is a simplified parser; qdb-cli itself has more sophisticated parsing.
-    """
-    qdb_connection_args: List[str] = []
-    qdb_passthrough_args: List[str] = []
-
-    i = 0
-    while i < len(remainder_args):
-        arg = remainder_args[i]
-        # Known connection-related arguments that take a value
-        if arg in (
-            "-H",
-            "--host",
-            "--port",
-            "-u",
-            "--user",
-            "-p",
-            "--password",
-            "--timeout",
-            "--scheme",
-            "--config",
-        ):
-            qdb_connection_args.append(arg)
-            if i + 1 < len(remainder_args) and not remainder_args[i + 1].startswith(
-                "-"
-            ):
-                qdb_connection_args.append(remainder_args[i + 1])
-                i += 1
-            else:
-                # Option expecting arg but next is another option or end of list.
-                # qdb-cli will handle this error.
-                print(
-                    f"Warning: Argument {arg} might be missing a value in passthrough args.",
-                    file=sys.stderr,
-                )
-        else:
-            qdb_passthrough_args.append(arg)
-        i += 1
-
-    return qdb_connection_args, qdb_passthrough_args
-
-
-def run_command_with_qdb_cli(
-    sql_query: str,
-    qdb_connection_args: List[str],
-    qdb_passthrough_args: List[str],
-    dry_run: bool,
-    script_info_flag: bool,
+# --- qdb-cli Runner ---
+def run_qdb_cli(
+    global_qdb_options: List[str],
+    exec_specific_args: List[str],
+    dry_run: bool = False,
+    script_info_flag: bool = False,  # To control this script's "+ Running" message
 ) -> None:
     """
     Constructs and runs the qdb-cli command.
+    `global_qdb_options` are options like --host, --port, and script's --info.
+    `exec_specific_args` are arguments for the `exec` subcommand itself (e.g., -q SQL --psql).
     """
-    cmd = ["qdb-cli"]
-
-    if script_info_flag:
-        # Check if --info or -i is already present to avoid duplication
-        has_info_flag = any(
-            arg in ("-i", "--info")
-            for arg in qdb_connection_args + qdb_passthrough_args
-        )
-        if not has_info_flag:
-            cmd.append("--info")
-
-    cmd.extend(qdb_connection_args)
-
-    # Core command: exec -q <SQL> --psql
-    # Any passthrough args that are not connection args are assumed to be for 'exec'
-    cmd.extend(["exec"])
-    cmd.extend(qdb_passthrough_args)
-    cmd.extend(
-        ["-q", sql_query, "--psql"]
-    )  # -q and --psql are specific to this script's exec call
+    cmd_list = ["qdb-cli"]
+    cmd_list.extend(global_qdb_options)  # Global options first
+    cmd_list.append("exec")  # Then the subcommand
+    cmd_list.extend(exec_specific_args)  # Then subcommand's arguments
 
     if dry_run:
-        print(f"Dry run: {shlex.join(cmd)}")
+        print(f"Dry run: {shlex.join(cmd_list)}")
         return
 
-    if script_info_flag:
-        print(f"+ Running: {shlex.join(cmd)}", file=sys.stderr)
+    if script_info_flag:  # If this script's -i/--info was used
+        print(f"+ Running: {shlex.join(cmd_list)}", file=sys.stderr)
 
     try:
         result = subprocess.run(
-            cmd,
+            cmd_list,
             check=True,
             capture_output=True,
             text=True,
             encoding="utf-8",
             errors="replace",
         )
-        if result.stdout:
-            print(result.stdout, end="")
+        # Print stdout (the actual results from qdb-cli)
+        sys.stdout.write(result.stdout)
 
-        if (
-            script_info_flag and result.stderr
-        ):  # Only show qdb-cli stderr if script's info flag is on
-            print(f"  qdb-cli stderr:\n{result.stderr.strip()}", file=sys.stderr)
+        # Print stderr (logs from qdb-cli, if qdb-cli's --info was passed via global_qdb_options) to stderr
+        if result.stderr:
+            sys.stderr.write(result.stderr)
 
     except FileNotFoundError:
-        print(
-            "Error: 'qdb-cli' command not found. Please ensure it's installed and in your PATH.",
-            file=sys.stderr,
-        )
+        print("Error: 'qdb-cli' command not found.", file=sys.stderr)
+        print("Please ensure it's installed and in your PATH.", file=sys.stderr)
         sys.exit(1)
     except subprocess.CalledProcessError as e:
         print(
             f"Error: qdb-cli command failed with exit code {e.returncode}.",
             file=sys.stderr,
         )
-        if e.stdout:  # Show stdout/stderr from failed command for debugging
+        if e.stdout:
             print(f"  qdb-cli stdout:\n{e.stdout.strip()}", file=sys.stderr)
         if e.stderr:
             print(f"  qdb-cli stderr:\n{e.stderr.strip()}", file=sys.stderr)
         sys.exit(e.returncode)
     except Exception as e:
-        print(
-            f"An unexpected error occurred while running qdb-cli: {e}", file=sys.stderr
-        )
+        print(f"An unexpected error occurred running qdb-cli: {e}", file=sys.stderr)
         sys.exit(1)
 
 
+# --- Main Execution ---
 def main():
     parser = setup_arg_parser()
     args = parser.parse_args()
 
-    if not args.search_term:
-        # Argparse should handle this if 'search_term' is not optional,
-        # but good to have a check if it were made optional.
-        parser.error("the following arguments are required: search_term")
-
-    qdb_conn_args, qdb_passthrough_exec_args = parse_qdb_cli_remainder_args(
-        args.qdb_cli_args
-    )
-
-    if args.info:  # Script's own --info logging
-        print(f"Script args: {args}", file=sys.stderr)
-        print(f"Parsed qdb_connection_args: {qdb_conn_args}", file=sys.stderr)
-        print(
-            f"Parsed qdb_passthrough_exec_args (for 'exec'): {qdb_passthrough_exec_args}",
-            file=sys.stderr,
-        )
+    if not args.search_query:
+        # argparse usually handles this if 'search_query' is not optional.
+        # This check is a safeguard if its definition changes.
+        parser.error("the following arguments are required: search_query")
 
     sql_query = build_sql_query(args)
-    if args.info:
-        print(f"Generated SQL query: {sql_query}", file=sys.stderr)
 
-    run_command_with_qdb_cli(
-        sql_query, qdb_conn_args, qdb_passthrough_exec_args, args.dry_run, args.info
+    # Global options for qdb-cli (connection details, --info for qdb-cli itself)
+    qdb_global_options = []
+    if args.info:  # This script's --info flag controls qdb-cli's --info flag
+        qdb_global_options.append("--info")
+    if args.qdb_cli_args:  # REMAINDER args like --host, --port
+        qdb_global_options.extend(args.qdb_cli_args)
+
+    # Arguments for the `qdb-cli exec` subcommand itself
+    qdb_exec_specific_args = ["-q", sql_query, "--psql"]
+
+    run_qdb_cli(
+        global_qdb_options=qdb_global_options,
+        exec_specific_args=qdb_exec_specific_args,
+        dry_run=args.dry_run,
+        script_info_flag=args.info,  # Pass this script's info flag to control "+ Running"
     )
 
 
