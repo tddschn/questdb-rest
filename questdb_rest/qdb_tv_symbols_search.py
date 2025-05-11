@@ -17,6 +17,9 @@ except ImportError:
     sys.exit(1)
 # --- Argument Parsing ---
 
+DEFAULT_TABLE_NAME_US = "tv_symbols_us"
+DEFAULT_TABLE_NAME_ALL = "tv_symbols"
+
 
 def setup_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -25,6 +28,13 @@ def setup_arg_parser() -> argparse.ArgumentParser:
         epilog="This script is for self use only, it won't work for you unless you have the same db as mine.\n\nExamples:\n  # Case-insensitive search for 'spy' in the ticker field\n  %(prog)s spy\n\n  # Case-insensitive search for 'apple' in the full field\n  %(prog)s -f apple\n\n  # Search for 'goog' in ticker, filtered by NASDAQ and NYSE namespaces\n  %(prog)s goog -N NASDAQ NYSE\n  \n  # Search for 'aapl' and output as CSV\n  %(prog)s aapl --csv\n\n  # Search for 'msft' and output as CSV without header\n  %(prog)s msft --csv --no-header\n\n  # Dry run search for 'tsla' with --info for qdb-cli, and custom host\n  %(prog)s tsla --dry-run --info --host myquestdb.local\n",
     )
     parser.add_argument("search_query", help="The string to search for.")
+    parser.add_argument(
+        "-a",
+        "--all",
+        help='Search in the "tv_symbols" table instead of "tv_symbols_us".',
+        action="store_true",
+        dest="search_all",
+    )
     parser.add_argument(
         "-f",
         "--full",
@@ -72,7 +82,10 @@ def setup_arg_parser() -> argparse.ArgumentParser:
 
 
 def build_sql_query(args: argparse.Namespace) -> str:
-    tv_symbols_us = Table("tv_symbols_us")
+    if args.search_all:
+        tv_symbols_us = Table("tv_symbols")
+    else:
+        tv_symbols_us = Table("tv_symbols_us")
     # Start with selecting columns
     query_builder = Query.from_(tv_symbols_us).select(
         tv_symbols_us.namespace, tv_symbols_us.ticker, tv_symbols_us.full
