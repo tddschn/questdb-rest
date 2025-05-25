@@ -10,7 +10,7 @@ from questdb_rest.utils import _qdb_exec_result_dict_extract_field
 # consts
 # --------------------
 
-__version__ = "4.4.4"
+__version__ = "4.4.5"
 CLI_EPILOG = """This CLI can also be used as a Python library.
 
 Links:
