@@ -42,7 +42,7 @@ def setup_arg_parser() -> argparse.ArgumentParser:  # Use python script name
     parser = argparse.ArgumentParser(
         description="Get a list of table names or full table info from QuestDB, with filtering and sorting options.",
         formatter_class=argparse.RawTextHelpFormatter,
-        epilog="Examples:\n  # list all table names (default order)\n  {prog}\n\n  # list tables matching 'trade' AND 'usd'\n  {prog} trade usd\n\n  # list tables matching 'trade' but NOT 'backup' or 'temp'\n  {prog} trade -v backup temp\n\n  # list tables NOT matching 'backup_' or starting with 'test_'\n  {prog} -v backup_ 'test_.*'\n\n  # list tables NOT matching 'backup_' or starting with 'test_' case-insensitively\n  {prog} -i -v backup_ 'test_.*'\n\n  # list tables matching 'cme_liq' case-insensitively\n  {prog} -i cme_liq\n\n  # list tables partitioned by YEAR or MONTH\n  {prog} -P YEAR,MONTH\n\n  # list WAL tables with deduplication enabled and a designated timestamp\n  {prog} -d -t\n\n  # show full info for tables starting with 'trade', partitioned by DAY\n  {prog} -f -P DAY trades_\n\n  # show full info for tables matching 'cme_liq' and NOT 'test', with length >= 10\n  {prog} cme_liq -v test -l 10 -f\n\n  # list tables matching 'cme_liq' that have no designated timestamp\n  {prog} cme_liq -T\n\n  # list tables sorted by name descending, limit 10\n  {prog} -s table_name -r -n 10\n\n  # list tables sorted by default (table_name) ascending, limit 5\n  {prog} -s -n 5\n".format(
+        epilog="Examples:\n  # list all table names (default order)\n  {prog}\n\n  # list tables matching 'trade' AND 'usd'\n  {prog} trade usd\n\n  # list tables matching 'trade' but NOT 'backup' or 'temp'\n  {prog} trade -v backup temp\n\n  # list tables NOT matching 'backup_' or starting with 'test_'\n  {prog} -v backup_ 'test_.*'\n\n  # list tables NOT matching 'backup_' or starting with 'test_' case-insensitively\n  {prog} -i -v backup_ 'test_.*'\n\n  # list tables matching 'cme_liq' case-insensitively\n  {prog} -i cme_liq\n\n  # list tables partitioned by YEAR or MONTH\n  {prog} -P YEAR,MONTH\n\n  # list WAL tables with deduplication enabled and a designated timestamp\n  {prog} -d -t\n\n  # show full info for tables starting with 'trade', partitioned by DAY\n  {prog} -f -P DAY trades_\n\n  # show full info for tables matching 'cme_liq' and NOT 'test', with length >= 10\n  {prog} cme_liq -v test -l 10 -f\n\n  # list tables matching 'cme_liq' that have no designated timestamp\n  {prog} cme_liq -T\n\n  # list tables with id >= 5 and id <= 10\n  {prog} --min-id 5 --max-id 10\n\n  # list tables sorted by name descending, limit 10\n  {prog} -s table_name -r -n 10\n\n  # list tables sorted by default (table_name) ascending, limit 5\n  {prog} -s -n 5\n".format(
             prog="qdb-tables"
         ),
     )
@@ -121,6 +121,9 @@ def setup_arg_parser() -> argparse.ArgumentParser:  # Use python script name
     parser.add_argument(
         "-L", "--max-length", type=int, help="Only tables with name length <= N."
     )
+    # New ID filters
+    parser.add_argument("--min-id", type=int, help="Only tables with id >= N.")
+    parser.add_argument("--max-id", type=int, help="Only tables with id <= N.")
     # --- Sorting & Limiting ---
     # Default value if -s is present without an argument
     parser.add_argument(
@@ -179,6 +182,16 @@ def validate_args(args: argparse.Namespace):
             )
             print(f"Available options: {','.join(PARTITION_OPTIONS)}", file=sys.stderr)
             sys.exit(1)
+    if (
+        args.min_id is not None
+        and args.max_id is not None
+        and (args.min_id > args.max_id)
+    ):
+        print(
+            f"Error: --min-id ({args.min_id}) cannot be greater than --max-id ({args.max_id}).",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
 
 # --- Build the SQL query string ---
@@ -216,6 +229,11 @@ def build_sql_query(args: argparse.Namespace) -> str:
         pypika_conditions.append(fn.Length(tables_table.table_name) >= args.min_length)
     if args.max_length is not None:
         pypika_conditions.append(fn.Length(tables_table.table_name) <= args.max_length)
+    # ID Filters
+    if args.min_id is not None:
+        pypika_conditions.append(tables_table.id >= args.min_id)
+    if args.max_id is not None:
+        pypika_conditions.append(tables_table.id <= args.max_id)
     # Apply PyPika conditions if any exist
     if pypika_conditions:
         query = query.where(Criterion.all(pypika_conditions))
@@ -240,9 +258,8 @@ def build_sql_query(args: argparse.Namespace) -> str:
         # Use the correct column expression based on case sensitivity
         raw_sql_conditions.append(f"{table_name_expr} !~ '{safe_regex}'")
     # UUID Filter (case insensitive is irrelevant for UUID format)
-    uuid_table_name_expr = (
-        "table_name"  # UUID regex is case-insensitive by definition [0-9a-f]
-    )
+    # UUID regex is case-insensitive by definition [0-9a-f]
+    uuid_table_name_expr = "table_name"
     if args.uuid:
         raw_sql_conditions.append(f"{uuid_table_name_expr} ~ '{UUID_REGEX}'")
     elif args.no_uuid:
