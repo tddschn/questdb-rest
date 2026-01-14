@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+from rich_argparse import RawTextRichHelpFormatter
 import subprocess
 import sys
 from typing import List, Optional, Tuple
@@ -41,7 +42,7 @@ PARTITION_OPTIONS = ["NONE", "YEAR", "MONTH", "DAY", "HOUR", "WEEK"]
 def setup_arg_parser() -> argparse.ArgumentParser:  # Use python script name
     parser = argparse.ArgumentParser(
         description="Get a list of table names or full table info from QuestDB, with filtering and sorting options.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         epilog="Examples:\n  # list all table names (default order)\n  {prog}\n\n  # list tables matching 'trade' AND 'usd'\n  {prog} trade usd\n\n  # list tables matching 'trade' but NOT 'backup' or 'temp'\n  {prog} trade -v backup temp\n\n  # list tables NOT matching 'backup_' or starting with 'test_'\n  {prog} -v backup_ 'test_.*'\n\n  # list tables NOT matching 'backup_' or starting with 'test_' case-insensitively\n  {prog} -i -v backup_ 'test_.*'\n\n  # list tables matching 'cme_liq' case-insensitively\n  {prog} -i cme_liq\n\n  # list tables partitioned by YEAR or MONTH\n  {prog} -P YEAR,MONTH\n\n  # list WAL tables with deduplication enabled and a designated timestamp\n  {prog} -d -t\n\n  # show full info for tables starting with 'trade', partitioned by DAY\n  {prog} -f -P DAY trades_\n\n  # show full info for tables matching 'cme_liq' and NOT 'test', with length >= 10\n  {prog} cme_liq -v test -l 10 -f\n\n  # list tables matching 'cme_liq' that have no designated timestamp\n  {prog} cme_liq -T\n\n  # list tables with id >= 5 and id <= 10\n  {prog} --min-id 5 --max-id 10\n\n  # list tables sorted by name descending, limit 10\n  {prog} -s table_name -r -n 10\n\n  # list tables sorted by default (table_name) ascending, limit 5\n  {prog} -s -n 5\n".format(
             prog="qdb-tables"
         ),

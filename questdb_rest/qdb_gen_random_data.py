@@ -4,6 +4,7 @@
 # Generates random data in QuestDB using its rnd_* functions via qdb-cli.
 # ---
 import argparse
+from rich_argparse import RawTextRichHelpFormatter
 import subprocess
 import sys
 import json
@@ -209,7 +210,7 @@ def build_insert_statement(table_name: str, select_list: List[str], rows: int) -
 def setup_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Generate random data in QuestDB using rnd_* functions via qdb-cli.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
     )
     parser.add_argument(
         "-n",

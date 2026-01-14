@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # questdb_rest/qdbdcs.py
 import argparse
+from rich_argparse import RawTextRichHelpFormatter
 import subprocess
 import sys
 import shlex
@@ -28,7 +29,7 @@ DEFAULT_SEARCH_FIELD = "instrument_id"
 def setup_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=f"Search the {DEFAULT_TABLE_NAME} table in QuestDB using pypika and qdb-cli.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         epilog=f"""Examples:
   # Case-insensitive search for 'eurusd' in the default 'instrument_id' field
   %(prog)s -I eurusd

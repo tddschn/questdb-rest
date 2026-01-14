@@ -2,6 +2,7 @@
 # questdb_rest/qdb_canned_queries_pypika.py
 
 import argparse
+from rich_argparse import RawTextRichHelpFormatter
 import subprocess
 import sys
 from typing import List, Optional
@@ -23,7 +24,7 @@ except ImportError:
 def setup_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Run a canned QuestDB query using pypika, reading table names from args or stdin.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         epilog="""Examples:
   # Count rows in a specific table
   %(prog)s my_table

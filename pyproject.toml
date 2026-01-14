@@ -46,6 +46,7 @@ pypika = "^0.48.9"
 
 
 # /* cSpell:enable */
+rich-argparse = "^1.7.2"
 [tool.poetry.group.dev.dependencies]
 icecream = "^2.1.4"
 

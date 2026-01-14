@@ -19,6 +19,7 @@
 # --------------------
 import uuid
 import argparse
+from rich_argparse import RawTextRichHelpFormatter
 import html
 from typing import Any, Dict, Union
 import sys
@@ -2631,7 +2632,7 @@ def _add_parser_imp(subparsers: argparse._SubParsersAction):
     parser_imp = subparsers.add_parser(
         "imp",
         help="Import data from file(s) using /imp.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
     )
     parser_imp.add_argument(
@@ -2753,7 +2754,7 @@ def _add_parser_exec(subparsers: argparse._SubParsersAction):
     parser_exec = subparsers.add_parser(
         "exec",
         help="Execute SQL statement(s) using /exec (returns JSON/text).\nReads SQL from --query, --file, --get-query-from-python-module, or stdin.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
     )
     parser_exec.add_argument(
@@ -2874,7 +2875,7 @@ def _add_parser_exp(subparsers: argparse._SubParsersAction):
     parser_exp = subparsers.add_parser(
         "exp",
         help="Export data using /exp (returns CSV to stdout or file).",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
     )
     parser_exp.add_argument(
@@ -2905,7 +2906,7 @@ def _add_parser_chk(subparsers: argparse._SubParsersAction):
     parser_chk = subparsers.add_parser(
         "chk",
         help="Check if one or more tables exist using /chk (returns JSON per table).\nReads table names from arguments, --file, or stdin.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
     )
     parser_chk.add_argument(
@@ -2938,7 +2939,7 @@ def _add_parser_schema(subparsers: argparse._SubParsersAction):
     parser_schema = subparsers.add_parser(
         "schema",
         help="Fetch CREATE TABLE statement(s) for one or more tables.\nReads table names from arguments, --file, or stdin.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
     )
     parser_schema.add_argument(
@@ -2976,7 +2977,7 @@ def _add_parser_rename(subparsers: argparse._SubParsersAction):
     parser_rename = subparsers.add_parser(
         "rename",
         help="Rename a table using RENAME TABLE. Backs up target name by default if it exists.",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
     )
     parser_rename.add_argument(
@@ -3007,7 +3008,7 @@ def _add_parser_cor(subparsers: argparse._SubParsersAction):
         "create-or-replace-table-from-query",
         aliases=["cor"],
         help="Atomically replace a table with the result of a query, with optional backup.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
     )
     parser_cor.add_argument(
@@ -3086,7 +3087,7 @@ def _add_parser_drop(subparsers: argparse._SubParsersAction):
         "drop",
         aliases=["drop-table"],
         help="Drop one or more tables using DROP TABLE.\nReads table names from arguments, --file, or stdin (one per line).",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
     )
     parser_drop.add_argument(
@@ -3126,7 +3127,7 @@ def _add_parser_dedupe(subparsers: argparse._SubParsersAction):
     parser_dedupe = subparsers.add_parser(
         "dedupe",
         help="Enable, disable, or check deduplication for one or more WAL tables.\nReads table names from arguments, --file, or stdin.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
     )
     parser_dedupe.add_argument(
@@ -3188,7 +3189,7 @@ def _add_parser_gen_config(subparsers: argparse._SubParsersAction):
     parser_gen_config = subparsers.add_parser(
         "gen-config",
         help="Generate a default config file at ~/.questdb-rest/config.json",
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
     )
     parser_gen_config.add_argument(
@@ -3627,7 +3628,7 @@ def build_parser():
     """Builds the argument parser."""
     parser = argparse.ArgumentParser(
         description="QuestDB REST API Command Line Interface.\nLogs to stderr, outputs data to stdout.\n\nUses QuestDB REST API via questdb_rest library.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         add_help=False,
         epilog=CLI_EPILOG,
     )

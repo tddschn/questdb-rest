@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # qdb_search_tv_symbols.py
 import argparse
+from rich_argparse import RawTextRichHelpFormatter
 import subprocess
 import sys
 import shlex
@@ -24,7 +25,7 @@ DEFAULT_TABLE_NAME_ALL = "tv_symbols"
 def setup_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Search the tv_symbols_us table in QuestDB using pypika and qdb-cli.",
-        formatter_class=argparse.RawTextHelpFormatter,
+        formatter_class=RawTextRichHelpFormatter,
         epilog="This script is for self use only, it won't work for you unless you have the same db as mine.\n\nExamples:\n  # Case-insensitive search for 'spy' in the ticker field\n  %(prog)s spy\n\n  # Case-insensitive search for 'apple' in the full field\n  %(prog)s -f apple\n\n  # Search for 'goog' in ticker, filtered by NASDAQ and NYSE namespaces\n  %(prog)s goog -N NASDAQ NYSE\n  \n  # Search for 'aapl' and output as CSV\n  %(prog)s aapl --csv\n\n  # Search for 'msft' and output as CSV without header\n  %(prog)s msft --csv --no-header\n\n  # Dry run search for 'tsla' with --info for qdb-cli, and custom host\n  %(prog)s tsla --dry-run --info --host myquestdb.local\n",
     )
     parser.add_argument("search_query", help="The string to search for.")
