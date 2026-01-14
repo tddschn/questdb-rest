@@ -1,0 +1,263 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Regex matching UUID-4 with either dashes or underscores
+UUID_REGEX='[0-9a-f]{8}([-_][0-9a-f]{4}){3}[-_][0-9a-f]{12}'
+
+print_help() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] [regex]
+
+Get a list of table names or full table info from QuestDB, with filtering options.
+Options can be placed before or after the optional regex pattern.
+
+Filtering Options:
+  regex                Optional positional argument: Regex pattern to match table names (uses '~').
+  -v, --inverse-match  Use inverse regex match ('!~') for the positional regex.
+  -u, --uuid           Only tables containing a UUID-4 in their name.
+  -U, --no-uuid        Only tables NOT containing a UUID-4 in their name. Mutually exclusive with -u.
+  -P, --partitionBy P  Filter by partitioning strategy. P is a comma-separated list
+                       (no spaces) of values like NONE,YEAR,MONTH,DAY,HOUR,WEEK.
+                       Example: -P YEAR,MONTH
+  -t, --has-designated-timestamp
+                       Only tables that have a designated timestamp column. Mutually exclusive with -T.
+  -T, --no-designated-timestamp
+                       Only tables that do NOT have a designated timestamp column. Mutually exclusive with -t.
+  -d, --dedup-enabled  Only tables with deduplication enabled. Mutually exclusive with -D.
+  -D, --dedup-disabled Only tables with deduplication disabled. Mutually exclusive with -d.
+  -l, --min-length N   Only tables with name length >= N.
+  -L, --max-length N   Only tables with name length <= N.
+
+Output Options:
+  -f, --full-cols      Show all columns from the 'tables' table in PSQL format.
+                       (Default: shows only table names, one per line)
+  -h, --help           Show this help message and exit
+
+Examples:
+  # list all table names (default)
+  $(basename "$0")
+
+  # list tables NOT matching 'backup_'
+  $(basename "$0") -v backup_
+
+  # list tables partitioned by YEAR or MONTH
+  $(basename "$0") -P YEAR,MONTH
+
+  # list WAL tables with deduplication enabled and a designated timestamp
+  $(basename "$0") -d -t
+
+  # show full info for tables starting with 'trade', partitioned by DAY
+  $(basename "$0") -f -P DAY trades_
+
+  # show full info for tables matching 'cme_liq' with length >= 10 (options after regex)
+  $(basename "$0") cme_liq -l 10 -f
+
+  # list tables matching 'cme_liq' that have no designated timestamp
+  $(basename "$0") cme_liq -T
+EOF
+}
+
+# --- Option Parsing ---
+# Separate options from potential positional arguments first
+declare -a options_array=()
+declare -a positional_args=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -*) # It's an option or option with argument
+        options_array+=("$1")
+        # If the option expects an argument (check based on known options)
+        case "$1" in
+        -l | --min-length | -L | --max-length | -P | --partitionBy)
+            # Check if the next argument exists and doesn't start with '-'
+            if [[ -n "${2:-}" ]] && [[ ! "$2" =~ ^- ]]; then
+                options_array+=("$2")
+                shift # Consume the option's argument as well
+            fi
+            ;;
+        *) ;; # No argument expected for other flags
+        esac
+        ;;
+    *) # It's a positional argument
+        positional_args+=("$1")
+        ;;
+    esac
+    shift # Move to the next argument
+done
+
+# --- Process Options using getopts on the separated options array ---
+# Defaults
+uuid_flag=false
+no_uuid_flag=false
+full_cols_flag=false
+inverse_match_flag=false
+partition_by_filter=""
+ts_filter=""
+dedup_filter=""
+min_length=""
+max_length=""
+
+# Reset OPTIND for getopts processing on the new array
+OPTIND=1
+
+# ***** FIX: Added 'T' to the getopts option string *****
+while getopts ":huUfvtdDTl:L:P:" opt "${options_array[@]}"; do
+    case ${opt} in
+    h)
+        print_help
+        exit 0
+        ;;
+    u) uuid_flag=true ;;
+    U) no_uuid_flag=true ;;
+    f) full_cols_flag=true ;;
+    v) inverse_match_flag=true ;;
+    t)
+        if [[ -n "$ts_filter" ]]; then
+            echo "Error: Options -t and -T are mutually exclusive." >&2
+            exit 1
+        fi
+        ts_filter="IS NOT NULL"
+        ;;
+    T) # Case for -T flag
+        if [[ -n "$ts_filter" ]]; then
+            echo "Error: Options -t and -T are mutually exclusive." >&2
+            exit 1
+        fi
+        ts_filter="IS NULL"
+        ;;
+    d)
+        if [[ -n "$dedup_filter" ]]; then
+            echo "Error: Options -d and -D are mutually exclusive." >&2
+            exit 1
+        fi
+        dedup_filter="true"
+        ;;
+    D)
+        if [[ -n "$dedup_filter" ]]; then
+            echo "Error: Options -d and -D are mutually exclusive." >&2
+            exit 1
+        fi
+        dedup_filter="false"
+        ;;
+    l)
+        if ! [[ "$OPTARG" =~ ^[0-9]+$ ]]; then
+            echo "Error: --min-length requires a non-negative integer." >&2
+            exit 1
+        fi
+        min_length="$OPTARG"
+        ;;
+    L)
+        if ! [[ "$OPTARG" =~ ^[0-9]+$ ]]; then
+            echo "Error: --max-length requires a non-negative integer." >&2
+            exit 1
+        fi
+        max_length="$OPTARG"
+        ;;
+    P) partition_by_filter="$OPTARG" ;;
+    \?) # Invalid option found by getopts
+        echo "Invalid option detected near '$OPTARG' in [${options_array[*]}]" >&2
+        print_help
+        exit 1
+        ;;
+    :) # Missing argument detected by getopts
+        echo "Option near '$OPTARG' requires an argument." >&2
+        print_help
+        exit 1
+        ;;
+    esac
+done
+
+# --- Process Positional Arguments ---
+regex=""
+if [[ ${#positional_args[@]} -gt 1 ]]; then
+    echo "Error: Too many positional arguments. Only one regex pattern is allowed." >&2
+    echo "Found: ${positional_args[@]}" >&2
+    print_help
+    exit 1
+elif [[ ${#positional_args[@]} -eq 1 ]]; then
+    regex="${positional_args[0]}"
+fi
+
+# --- Argument Validation ---
+if [[ "$uuid_flag" == true && "$no_uuid_flag" == true ]]; then
+    echo "Error: options -u|--uuid and -U|--no-uuid are mutually exclusive." >&2
+    exit 1
+fi
+
+# --- Build WHERE Clause ---
+declare -a conds=() # Use declare -a for explicit array
+
+# Positional Regex Filter
+if [[ -n "$regex" ]]; then
+    operator="~"
+    if [[ "$inverse_match_flag" == true ]]; then
+        operator="!~"
+    fi
+    # Escape single quotes within the regex pattern itself for the SQL string
+    safe_regex="${regex//\'/\'\'}"
+    conds+=("table_name ${operator} '${safe_regex}'")
+fi
+
+# UUID Filter
+if [[ "$uuid_flag" == true ]]; then
+    conds+=("table_name ~ '${UUID_REGEX}'")
+elif [[ "$no_uuid_flag" == true ]]; then
+    conds+=("table_name !~ '${UUID_REGEX}'")
+fi
+
+# Partition By Filter
+if [[ -n "$partition_by_filter" ]]; then
+    # Convert comma-separated list to SQL IN ('val1', 'val2') format
+    sql_in_list=$(echo "$partition_by_filter" | sed "s/,/','/g")
+    sql_in_list="'${sql_in_list}'"
+    conds+=("partitionBy IN (${sql_in_list})")
+fi
+
+# Designated Timestamp Filter
+if [[ -n "$ts_filter" ]]; then
+    conds+=("designatedTimestamp ${ts_filter}")
+fi
+
+# Deduplication Filter
+if [[ -n "$dedup_filter" ]]; then
+    conds+=("dedup = ${dedup_filter}")
+fi
+
+# Length Filters
+if [[ -n "$min_length" ]]; then
+    conds+=("length(table_name) >= ${min_length}")
+fi
+if [[ -n "$max_length" ]]; then
+    conds+=("length(table_name) <= ${max_length}")
+fi
+
+# Assemble WHERE clause using printf for robust joining with ' AND '
+where_clause=""
+if [[ ${#conds[@]} -gt 0 ]]; then
+    joined_conds=$(printf '%s AND ' "${conds[@]}") # Add " AND " after each element
+    joined_conds=${joined_conds% AND }             # Remove the trailing " AND "
+    where_clause="WHERE $joined_conds"
+fi
+
+# --- Construct and Execute Query ---
+select_cols="table_name"
+if [[ "$full_cols_flag" == true ]]; then
+    select_cols="*"
+fi
+
+# Construct final query
+query="SELECT ${select_cols} FROM tables ${where_clause}"
+
+# Prepare base command array
+declare -a CMD_ARRAY=(qdb-cli exec -q "$query") # Use declare -a
+
+# Add output formatting options based on the -f flag
+if [[ "$full_cols_flag" == true ]]; then
+    CMD_ARRAY+=(--psql)
+else
+    CMD_ARRAY+=(-x table_name)
+fi
+
+# Execute the command
+# Optional: Print the command if verbose/debug is needed
+# echo "Executing: ${CMD_ARRAY[*]}" >&2
+"${CMD_ARRAY[@]}"

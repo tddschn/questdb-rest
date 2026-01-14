@@ -1,0 +1,73 @@
+#!/usr/bin/env bash
+
+show_help() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS]
+Interactively select a QuestDB table and (if needed) a column, then run qdb-canned-queries with your chosen options.
+
+Options (forwarded to qdb-canned-queries):
+  -d, --distinct       Distinct mode (requires column)
+  -c, --count          Distinct count mode (requires column)
+  -n, --dry-run        Show the command that would be run, but don't execute it
+  -v, --verbose        Show the command before running it
+  -h, --help           Show this help message and exit
+
+Examples:
+  # default count mode
+  $(basename "$0")
+  # distinct mode
+  $(basename "$0") -d
+  # distinct count mode, dry run
+  $(basename "$0") -c -n
+EOF
+}
+
+# Collect flags to forward
+QDB_FLAGS=()
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -d | --distinct | -c | --count | -n | --dry-run | -v | --verbose)
+        QDB_FLAGS+=("$1")
+        shift
+        ;;
+    -h | --help)
+        show_help
+        exit 0
+        ;;
+    --)
+        shift
+        break
+        ;;
+    -*)
+        echo "Unknown option: $1" >&2
+        show_help
+        exit 1
+        ;;
+    *) break ;;
+    esac
+done
+
+# Step 1: select table
+TABLE=$(qdb-table-names | fzf --prompt="Select table> ") || exit 1
+
+# Determine if a column is required (for -d/--distinct or -c/--count)
+NEED_COL=0
+for flag in "${QDB_FLAGS[@]}"; do
+    if [[ "$flag" == "-d" || "$flag" == "--distinct" || "$flag" == "-c" || "$flag" == "--count" ]]; then
+        NEED_COL=1
+        break
+    fi
+done
+
+# Step 2: select column if needed
+if [[ $NEED_COL -eq 1 ]]; then
+    COL=$(qdb-cols --name-only "$TABLE" | fzf --prompt="Select column from '$TABLE'> ") || exit 1
+fi
+
+# Build and run the command
+CMD=(qdb-canned-queries "${QDB_FLAGS[@]}" "$TABLE")
+if [[ $NEED_COL -eq 1 ]]; then
+    CMD+=("$COL")
+fi
+
+exec "${CMD[@]}"

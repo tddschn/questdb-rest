@@ -1,0 +1,136 @@
+#!/usr/bin/env bash
+
+show_help() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] <table_name> [<col_name>]
+Run a canned QuestDB query and potentially clean up the output.
+
+Modes (mutually exclusive):
+  (default)       Count mode:
+                  SELECT count() FROM "<table_name>";
+                  → uses 'qdb-cli exec -x count'
+  -d, --distinct  Distinct mode:
+                  SELECT distinct ("<col_name>") FROM "<table_name>";
+                  → uses 'qdb-cli exec -x <col_name>'
+  -c, --count     Distinct count mode:
+                  SELECT distinct ("<col_name>"), count() FROM "<table_name>";
+                  → uses 'qdb-cli exec --psql' (no post‐processing)
+
+Options:
+  -n, --dry-run   Show the command that would be run, but do not execute it.
+  -v, --verbose   Show the command before running it.
+  -h, --help      Show this help message and exit.
+
+Examples:
+  $(basename "$0") cme_liq_ba_ES
+  $(basename "$0") -d cme_liq_ba_ES CT
+  $(basename "$0") -c cme_liq_ba_ES CT
+  $(basename "$0") -n -c cme_liq_ba_ES CT
+EOF
+}
+
+# Defaults
+MODE="count"
+DRY_RUN=0
+VERBOSE=0
+
+# Parse flags
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -d | --distinct)
+        MODE="distinct"
+        shift
+        ;;
+    -c | --count)
+        MODE="distinct_count"
+        shift
+        ;;
+    -n | --dry-run)
+        DRY_RUN=1
+        shift
+        ;;
+    -v | --verbose)
+        VERBOSE=1
+        shift
+        ;;
+    -h | --help)
+        show_help
+        exit 0
+        ;;
+    --)
+        shift
+        break
+        ;;
+    -*)
+        echo "Unknown option: $1" >&2
+        show_help
+        exit 1
+        ;;
+    *) break ;;
+    esac
+done
+
+# Positional args
+TABLE="$1"
+COL="$2"
+
+if [[ -z "$TABLE" ]]; then
+    echo "Error: <table_name> is required." >&2
+    show_help
+    exit 1
+fi
+
+# Ensure table/column names with spaces or special chars are handled (using quotes in SQL)
+# Basic quoting - adjust if table/col names can contain double quotes themselves
+SAFE_TABLE="${TABLE//\"/\\\"}"
+SAFE_COL="${COL//\"/\\\"}"
+
+# Build the SQL and prepare the command arguments
+CMD_ARRAY=()
+SQL=""
+
+case "$MODE" in
+count)
+    SQL="select count() from \"${SAFE_TABLE}\";"
+    # Extract the 'count' column directly
+    CMD_ARRAY=(qdb-cli exec -q "$SQL" -x count)
+    ;;
+distinct)
+    if [[ -z "$COL" ]]; then
+        echo "Error: <col_name> is required for distinct mode." >&2
+        show_help
+        exit 1
+    fi
+    SQL="select distinct (\"${SAFE_COL}\") from \"${SAFE_TABLE}\";"
+    # Extract the specified distinct column directly
+    CMD_ARRAY=(qdb-cli exec -q "$SQL" -x "$SAFE_COL")
+    ;;
+distinct_count)
+    if [[ -z "$COL" ]]; then
+        echo "Error: <col_name> is required for distinct count mode." >&2
+        show_help
+        exit 1
+    fi
+    SQL="select distinct (\"${SAFE_COL}\"), count() from \"${SAFE_TABLE}\";"
+    # Use psql format for the two-column output
+    CMD_ARRAY=(qdb-cli exec --psql -q "$SQL")
+    ;;
+esac
+
+# Construct the string representation for dry-run/verbose output
+CMD_STR="${CMD_ARRAY[*]}"
+
+# Dry run?
+if [[ $DRY_RUN -eq 1 ]]; then
+    # Use printf for safer output of the command string
+    printf "Dry run: %s\n" "$CMD_STR"
+    exit 0
+fi
+
+# Verbose?
+if [[ $VERBOSE -eq 1 ]]; then
+    printf "Running: %s\n" "$CMD_STR"
+fi
+
+# Execute directly
+"${CMD_ARRAY[@]}"

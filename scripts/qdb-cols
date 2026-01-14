@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+show_help() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] <table_name>
+Show columns for a QuestDB table, optionally returning only the column names.
+
+Options:
+  -n, --name-only    Return only the column names (runs 'qdb-cli exec -x column').
+  -h, --help         Show this help message and exit.
+
+Examples:
+  $(basename "$0") cme_liq_ba_ES
+  $(basename "$0") --name-only cme_liq_ba_ES
+EOF
+}
+
+# Default
+NAME_ONLY=0
+
+# Parse flags
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -n | --name-only)
+        NAME_ONLY=1
+        shift
+        ;;
+    -h | --help)
+        show_help
+        exit 0
+        ;;
+    --) # end of options
+        shift
+        break
+        ;;
+    -*) # unknown option
+        echo "Unknown option: $1" >&2
+        show_help
+        exit 1
+        ;;
+    *) # first non-flag argument
+        break
+        ;;
+    esac
+done
+
+TABLE="$1"
+
+if [[ -z "$TABLE" ]]; then
+    echo "Error: <table_name> is required." >&2
+    show_help
+    exit 1
+fi
+
+# Escape double quotes in table name for the query
+SAFE_TABLE="${TABLE//\"/\\\"}"
+query="show columns from \"${SAFE_TABLE}\""
+
+if [[ $NAME_ONLY -eq 1 ]]; then
+    # Execute SHOW COLUMNS and extract only the 'column' field
+    qdb-cli exec -q "$query" -x column
+else
+    # Execute SHOW COLUMNS and display the full result using psql format
+    qdb-cli exec --psql -q "$query"
+fi

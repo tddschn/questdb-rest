@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "questdb-api"
-version = "1.3.2"
+version = "4.5.0"
 description = "QuestDB REST API Python client library and CLI"
 authors = ["Teddy Xinyuan Chen <45612704+tddschn@users.noreply.github.com>"]
 readme = "README.md"
@@ -14,6 +14,24 @@ packages = [{ include = "questdb_rest" }]
 [tool.poetry.scripts]
 qdb-cli = "questdb_rest.cli:main"
 questdb-cli = "questdb_rest.cli:main"
+qdb-tables = "questdb_rest.questdb_table_names_pypika:main"
+qdb-gen-random-data = "questdb_rest.qdb_gen_random_data:main"
+qdb-canned-queries = "questdb_rest.qdb_canned_queries_pypika:main"
+qdb-table-names = { reference = "scripts/qdb-table-names", type = "file" }
+qdb-cols = { reference = "scripts/qdb-cols", type = "file" }
+# qdb-canned-queries = { reference = "scripts/qdb-canned-queries", type = "file" }
+qdb-canned-queries-fzf = { reference = "scripts/qdb-canned-queries-fzf", type = "file" }
+qdb-drop-tables-by-regex = { reference = "scripts/qdb-drop-tables-by-regex", type = "file" }
+# questdb-drop-tables-by-regex = { reference = "scripts/questdb-drop-tables-by-regex", type = "file" }
+qdb-imp-from-stdin = { reference = "scripts/qdb-imp-from-stdin", type = "file" }
+# questdb-imp-from-stdin = { reference = "scripts/questdb-imp-from-stdin", type = "file" }
+qdb-copy-single-col-values-from-query = { reference = "scripts/qdb-copy-single-col-values-from-query", type = "file" }
+qdb-get-single-col-values-from-query = { reference = "scripts/qdb-get-single-col-values-from-query", type = "file" }
+
+# /* cSpell:disable */
+# for self use only, only works for my dbs
+qdbtvs = "questdb_rest.qdb_tv_symbols_search:main"
+qdbdcs = "questdb_rest.qdb_dukascopy_instruments_search:main"
 
 [tool.poetry.urls]
 "Bug Tracker" = "https://github.com/tddschn/questdb-rest/issues"
@@ -23,8 +41,12 @@ python = ">=3.11"
 requests = "^2.32.3"
 sqlparse = "^0.5.3"
 tabulate = "^0.9.0"
+argcomplete = "^3.6.2"
+pypika = "^0.48.9"
 
 
+# /* cSpell:enable */
+rich-argparse = "^1.7.2"
 [tool.poetry.group.dev.dependencies]
 icecream = "^2.1.4"
 

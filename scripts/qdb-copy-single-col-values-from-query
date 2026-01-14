@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+print_help() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] "<SQL_QUERY>"
+
+Run a single‐column SQL query via 'qdb-cli exec -x 0' and copy the results to the clipboard.
+The query MUST return only one column.
+
+OPTIONS:
+  -h, --help    Show this help message and exit
+
+EXAMPLE:
+  $(basename "$0") "SELECT bid_price FROM your_instrument WHERE spread_mark < 0"
+EOF
+}
+
+# If no arguments given, show help
+if [[ $# -eq 0 ]]; then
+    print_help
+    exit 1
+fi
+
+# Parse options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+    -h | --help)
+        print_help
+        exit 0
+        ;;
+    --) # end of options
+        shift
+        break
+        ;;
+    -*) # unknown option
+        echo "Unknown option: $1" >&2
+        print_help
+        exit 1
+        ;;
+    *) # first non-option argument is the query
+        break
+        ;;
+    esac
+done
+
+# Join all remaining args into a single SQL query
+query="$*"
+
+# Execute the query, extract the first (and assumed only) column (index 0), then copy to clipboard
+qdb-cli exec -q "$query" -x 0 | pbcopy
