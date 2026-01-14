@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+usage() {
+    printf "https://github.com/tddschn/questdb-rest\n\n"
+    printf "\n"
+    cat <<EOF
+Usage: $0 [-n] [-c] -p PATTERN
+
+Options:
+  -p PATTERN   Regex pattern to match table names (required)
+  -n           Dry run; show what would be dropped but do not execute
+  -c           Confirm each drop interactively
+  -h           Show this help message
+EOF
+    exit 1
+}
+
+# Defaults
+DRY_RUN=false
+CONFIRM=false
+PATTERN=""
+
+# Parse options
+while getopts ":p:nch" opt; do
+    case $opt in
+    p) PATTERN=$OPTARG ;;
+    n) DRY_RUN=true ;;
+    c) CONFIRM=true ;;
+    h) usage ;;
+    \?)
+        echo "Invalid option: -$OPTARG" >&2
+        usage
+        ;;
+    :)
+        echo "Option -$OPTARG requires an argument." >&2
+        usage
+        ;;
+    esac
+done
+
+# Must have a pattern
+if [[ -z $PATTERN ]]; then
+    echo "Error: pattern is required." >&2
+    usage
+fi
+
+# Fetch matching tables (skip header)
+mapfile -t TABLES < <(qdb-cli exp "select table_name from tables where table_name ~ '$PATTERN'" |
+    tail -n +2)
+
+if [[ ${#TABLES[@]} -eq 0 ]]; then
+    echo "No tables found matching pattern: $PATTERN"
+    exit 0
+fi
+
+# Process each table
+for tbl in "${TABLES[@]}"; do
+    if $DRY_RUN; then
+        echo "[DRY RUN] Would drop: $tbl"
+        continue
+    fi
+
+    if $CONFIRM; then
+        read -r -p "Drop table '$tbl'? [y/N] " answer
+        case $answer in
+        [Yy]*) ;;
+        *)
+            echo "Skipping: $tbl"
+            continue
+            ;;
+        esac
+    fi
+
+    echo "Dropping: $tbl"
+    qdb-cli exec -q "drop table $tbl"
+done

@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+# Treat unset variables as an error when substituting.
+set -u
+# Pipelines return status of the last command to exit with non-zero status,
+# or zero if all commands exit successfully.
+set -o pipefail
+
+# --- Configuration ---
+# Ensure qdb-cli command exists
+if ! command -v qdb-cli &>/dev/null; then
+    echo "Error: 'qdb-cli' command not found in PATH." >&2
+    echo "Please ensure QuestDB CLI is installed and accessible." >&2
+    exit 1
+fi
+
+# --- Help Message ---
+# Check if the first argument is -h or --help
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    # Use basename "$0" to show the actual script name in usage
+    SCRIPT_NAME=$(basename "$0")
+    printf "https://github.com/tddschn/questdb-rest\n\n"
+    printf "\n"
+    printf "Usage: cat data.csv | %s [qdb-cli imp options...]\n\n" "${SCRIPT_NAME}"
+    printf "This script reads CSV data from standard input, saves it to a temporary file,\n"
+    printf "and then imports it into QuestDB using 'qdb-cli imp'.\n\n"
+    printf "All arguments provided to this script (except -h or --help) are passed directly\n"
+    printf "to the 'qdb-cli imp' command. The temporary CSV file path is automatically\n"
+    printf "prepended to the arguments passed to 'qdb-cli imp'.\n\n"
+    printf "Example:\n"
+    printf "  echo 'ts,value\\n2023-01-01T00:00:00.000Z,10' | ./%s --table my_table --addr localhost:8812\n\n" "${SCRIPT_NAME}"
+    printf -- "----------------------------------------------------------------------\n"
+    printf "Delegating to 'qdb-cli imp --help' for specific import options:\n\n"
+    qdb-cli imp --help
+    exit 0
+fi
+
+# --- Main Logic ---
+
+# Create a temporary file to store stdin
+# mktemp creates a file with a unique name in the default temporary directory
+CSV_PATH=$(mktemp)
+
+# Ensure the temporary file is removed when the script exits (successfully or on error)
+# Note: The 'EXIT' signal trap executes *after* any 'ERR' trap if set -e is used.
+cleanup() {
+    # Use -f to avoid errors if the file somehow doesn't exist
+    rm -f "${CSV_PATH}"
+}
+trap cleanup EXIT
+
+# Read all data from standard input and save it to the temporary file
+# Using 'cat' without arguments reads from stdin
+# Using > redirects stdout to the file, overwriting it if it exists (which it shouldn't here)
+cat >"${CSV_PATH}"
+
+# Check if stdin was empty (the temp file would be empty)
+if [[ ! -s "${CSV_PATH}" ]]; then
+    echo "Warning: Standard input was empty. No data to import." >&2
+    # Exiting cleanly as no error occurred, but nothing was done.
+    # Alternatively, exit 1 if empty input should be an error.
+    exit 0
+fi
+
+# Execute the qdb-cli import command:
+# - Pass the path to the temporary CSV file as the first argument.
+# - Pass all script arguments ("$@") to qdb-cli imp.
+#   The double quotes around "$@" are crucial to handle arguments with spaces correctly.
+echo "Importing data from temporary file: ${CSV_PATH}" >&2 # Log to stderr
+qdb-cli imp "${CSV_PATH}" "$@"
+
+# The 'trap cleanup EXIT' automatically runs here to remove the temp file.
+echo "Import process finished." >&2
