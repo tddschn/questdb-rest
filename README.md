@@ -559,12 +559,30 @@ qdb-mcp
 
 | Tool | Description |
 |------|-------------|
-| `execute_sql` | Execute any SQL query (SELECT, INSERT, CREATE, DROP, ...) |
-| `list_tables` | List all tables in QuestDB |
+| `execute_sql` | Execute any SQL query with output format options (json/csv/psql/markdown) |
+| `list_tables` | List tables with regex filtering, UUID filtering, and limit |
 | `describe_table` | Get column info for a table |
 | `get_table_schema` | Get the CREATE TABLE statement for a table |
 | `check_table_exists` | Check if a table exists |
 | `export_csv` | Export query results as CSV |
+
+#### Tool Parameters
+
+**`execute_sql`**
+- `query` (required): SQL query to execute
+- `limit`: Result limit (default: "100", use "0" for unlimited)
+- `statement_timeout`: Query timeout in milliseconds
+- `output_format`: "json" (default), "csv", "psql" (ASCII table), or "markdown"
+
+**`list_tables`**
+- `pattern`: Regex to match table names (e.g., "trades", "cme_.*")
+- `exclude_pattern`: Regex to exclude tables (e.g., "backup", "test_.*")
+- `has_uuid`: `true` for tables with UUID-4 in name, `false` for without
+- `limit`: Max tables to return (default: 100, `null` for unlimited)
+
+**`export_csv`**
+- `query` (required): SQL query to execute
+- `limit`: Result limit (default: "100", use "0" for unlimited)
 
 ### Exposed MCP resources
 
