@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "questdb-rest"
-version = "4.5.0"
+version = "5.0.1"
 description = "QuestDB REST API Python client library and CLI"
 authors = ["Teddy Xinyuan Chen <45612704+tddschn@users.noreply.github.com>"]
 readme = "README.md"
@@ -14,6 +14,7 @@ packages = [{ include = "questdb_rest" }]
 [tool.poetry.scripts]
 qdb-cli = "questdb_rest.cli:main"
 questdb-cli = "questdb_rest.cli:main"
+qdb-mcp = "questdb_rest.mcp_server:run_server"
 qdb-tables = "questdb_rest.questdb_table_names_pypika:main"
 qdb-gen-random-data = "questdb_rest.qdb_gen_random_data:main"
 qdb-canned-queries = "questdb_rest.qdb_canned_queries_pypika:main"
@@ -43,10 +44,14 @@ sqlparse = "^0.5.3"
 tabulate = "^0.9.0"
 argcomplete = "^3.6.2"
 pypika = "^0.48.9"
+mcp = { version = ">=1.0.0", optional = true }
 
 
 # /* cSpell:enable */
 rich-argparse = "^1.7.2"
+
+[tool.poetry.extras]
+mcp = ["mcp"]
 [tool.poetry.group.dev.dependencies]
 icecream = "^2.1.4"
 
