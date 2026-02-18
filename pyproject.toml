@@ -15,6 +15,7 @@ packages = [{ include = "questdb_rest" }]
 qdb-cli = "questdb_rest.cli:main"
 questdb-cli = "questdb_rest.cli:main"
 qdb-mcp = "questdb_rest.mcp_server:run_server"
+questdb-mcp = "questdb_rest.mcp_server:run_server"
 qdb-tables = "questdb_rest.questdb_table_names_pypika:main"
 qdb-gen-random-data = "questdb_rest.qdb_gen_random_data:main"
 qdb-canned-queries = "questdb_rest.qdb_canned_queries_pypika:main"
