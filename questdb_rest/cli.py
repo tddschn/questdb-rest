@@ -2548,6 +2548,23 @@ def handle_gen_config(args, client: Any = None):
     sys.exit(0)
 
 
+def handle_mcp(args, client: Any = None):
+    """Starts the MCP (Model Context Protocol) server for LLM integration."""
+    try:
+        from questdb_rest.mcp_server import run_server
+    except ImportError as e:
+        if "mcp" in str(e).lower():
+            logger.error(
+                "MCP package not installed. Install with: pip install questdb-rest[mcp]"
+            )
+        else:
+            logger.error(f"Failed to import MCP server module: {e}")
+        sys.exit(1)
+
+    # Run the MCP server (blocks until terminated)
+    run_server()
+
+
 def detect_scheme_in_host(host_str):
     """
     Detect if the host string already includes a URL scheme (http:// or https://).
@@ -3203,6 +3220,28 @@ def _add_parser_gen_config(subparsers: argparse._SubParsersAction):
     parser_gen_config.set_defaults(func=handle_gen_config, requires_client=False)
 
 
+def _add_parser_mcp(subparsers: argparse._SubParsersAction):
+    """Adds arguments for the 'mcp' subcommand."""
+    parser_mcp = subparsers.add_parser(
+        "mcp",
+        help="Start MCP (Model Context Protocol) server for LLM integration (e.g., Claude)",
+        description="Starts an MCP server that exposes QuestDB operations as tools.\n"
+        "This allows LLMs like Claude to interact with QuestDB via stdio transport.\n\n"
+        "Requires the 'mcp' extra: pip install questdb-rest[mcp]",
+        formatter_class=RawTextRichHelpFormatter,
+        add_help=False,
+    )
+    parser_mcp.add_argument(
+        "-h",
+        "--help",
+        action="help",
+        default=argparse.SUPPRESS,
+        help="Show this help message and exit.",
+    )
+    # No client needed - MCP server creates its own
+    parser_mcp.set_defaults(func=handle_mcp, requires_client=False)
+
+
 def get_args():
     """Parses command line arguments."""
     parser = argparse.ArgumentParser(
@@ -3656,4 +3695,5 @@ def build_parser():
     _add_parser_drop(subparsers)
     _add_parser_dedupe(subparsers)
     _add_parser_gen_config(subparsers)
+    _add_parser_mcp(subparsers)
     return parser

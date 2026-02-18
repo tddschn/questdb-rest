@@ -240,7 +240,7 @@ qdb-cli -h
 usage: questdb-cli [-h] [-H HOST] [--port PORT] [-u USER] [-p PASSWORD]
                    [--timeout TIMEOUT] [--scheme {http,https}] [-i | -D] [-R]
                    [--config CONFIG] [--stop-on-error | --no-stop-on-error]
-                   {imp,exec,exp,chk,schema,rename,create-or-replace-table-from-query,cor,drop,drop-table,dedupe,gen-config}
+                   {imp,exec,exp,chk,schema,rename,create-or-replace-table-from-query,cor,drop,drop-table,dedupe,gen-config,mcp}
                    ...
 
 QuestDB REST API Command Line Interface.
@@ -249,7 +249,7 @@ Logs to stderr, outputs data to stdout.
 Uses QuestDB REST API via questdb_rest library.
 
 positional arguments:
-  {imp,exec,exp,chk,schema,rename,create-or-replace-table-from-query,cor,drop,drop-table,dedupe,gen-config}
+  {imp,exec,exp,chk,schema,rename,create-or-replace-table-from-query,cor,drop,drop-table,dedupe,gen-config,mcp}
                         Available sub-commands
     imp                 Import data from file(s) using /imp.
     exec                Execute SQL statement(s) using /exec (returns JSON).
@@ -263,6 +263,7 @@ positional arguments:
     drop (drop-table)   Drop one or more tables using DROP TABLE.
     dedupe              Enable, disable, or check data deduplication settings for a WAL table.
     gen-config          Generate a default config file at ~/.questdb-rest/config.json
+    mcp                 Start MCP server for LLM integration (e.g., Claude). Requires questdb-rest[mcp].
 
 options:
   -h, --help            Show this help message and exit.
@@ -517,6 +518,62 @@ ERROR: Error: Designated timestamp column 'timestamp' must be included in --upse
   "ddl": "OK"
 }
 ```
+
+## MCP Server (LLM Integration)
+
+`questdb-rest` includes an [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that lets LLMs like Claude interact with QuestDB directly.
+
+### Installation
+
+```bash
+# Install with MCP support
+uv tool install "questdb-rest[mcp]"
+# or
+pip install "questdb-rest[mcp]"
+```
+
+### Usage
+
+```bash
+# Start MCP server via CLI subcommand
+qdb-cli mcp
+
+# Or via the dedicated entry point
+qdb-mcp
+```
+
+### Claude Desktop / Claude Code config
+
+```json
+{
+  "mcpServers": {
+    "questdb": {
+      "command": "qdb-cli",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+### Exposed MCP tools
+
+| Tool | Description |
+|------|-------------|
+| `execute_sql` | Execute any SQL query (SELECT, INSERT, CREATE, DROP, ...) |
+| `list_tables` | List all tables in QuestDB |
+| `describe_table` | Get column info for a table |
+| `get_table_schema` | Get the CREATE TABLE statement for a table |
+| `check_table_exists` | Check if a table exists |
+| `export_csv` | Export query results as CSV |
+
+### Exposed MCP resources
+
+| URI | Description |
+|-----|-------------|
+| `questdb://tables` | Dynamic list of all tables |
+| `questdb://table/{name}/schema` | CREATE TABLE statement for a specific table |
+
+Connection config is loaded automatically from `~/.questdb-rest/config.json` (same as the CLI).
 
 ## Examples
 
@@ -862,6 +919,14 @@ pipx install questdb-rest
 ```bash
 # not recommended, but if you really want to:
 pip install questdb-rest
+```
+
+To include MCP server support for LLM integration:
+
+```bash
+uv tool install "questdb-rest[mcp]"
+# or
+pip install "questdb-rest[mcp]"
 ```
 
 
