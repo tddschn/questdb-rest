@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(poetry install:*)",
+      "Bash(poetry lock:*)"
+    ],
+    "additionalDirectories": [
+      "/Users/tsca/testdir/modelcontextprotocol/",
+      "/Users/tsca/testdir/questdb-documentation"
+    ]
+  }
+}
